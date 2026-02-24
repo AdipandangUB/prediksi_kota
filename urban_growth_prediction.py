@@ -110,27 +110,27 @@ with st.sidebar:
     st.subheader("🤖 Pilih Model")
     
     model_categories = {
-        "Jaringan Saraf": ['ANN', 'MLP'],
-        "Berbasis Pohon": ['DT', 'RF', 'GBM'],
-        "Statistik": ['LR', 'NB'],
-        "Berbasis Instance": ['KNN', 'SVM'],
-        "Lanjutan": ['MC', 'FL', 'EA']
+        "Neural Networks (Jaringan Saraf)": ['ANN', 'MLP'],
+        "Tree-based (Berbasis Pohon)": ['DT', 'RF', 'GBM'],
+        "Statistical (Statistik)": ['LR', 'NB'],
+        "Instantce-based (Berbasis Sampling)": ['KNN', 'SVM'],
+        "Advanced (Lanjutan)": ['MC', 'FL', 'EA']
     }
     
     selected_models = []
     model_descriptions = {
-        'ANN': 'Jaringan Saraf Tiruan - Model deep learning untuk pola kompleks',
-        'LR': 'Regresi Logistik - Model statistik dasar',
-        'MC': 'Rantai Markov - Model probabilitas transisi temporal',
-        'FL': 'Logika Fuzzy - Menangani ketidakpastian dalam klasifikasi',
-        'DT': 'Pohon Keputusan - Model berbasis aturan yang dapat diinterpretasi',
+        'ANN': 'Artificial Neural Networks (Jaringan Saraf Tiruan) - Model deep learning untuk pola kompleks',
+        'LR': 'Logistic Regression (Regresi Logistik) - Model statistik dasar',
+        'MC': 'Markov Chain (Rantai Markov) - Model probabilitas transisi temporal',
+        'FL': 'Fuzzy Logic (Logika Fuzzy) - Menangani ketidakpastian dalam klasifikasi',
+        'DT': 'Decision Tree (Pohon Keputusan) - Model berbasis aturan yang dapat diinterpretasi',
         'SVM': 'Support Vector Machine - Klasifikasi margin maksimum',
         'RF': 'Random Forest - Ensemble dari pohon keputusan',
         'GBM': 'Gradient Boosting - Pembelajaran ensemble sekuensial',
         'MLP': 'Multi-Layer Perceptron - Jaringan saraf feedforward',
         'KNN': 'K-Nearest Neighbors - Berbasis kedekatan spasial',
         'NB': 'Naive Bayes - Pengklasifikasi probabilistik',
-        'EA': 'Algoritma Evolusioner - Ensemble yang dioptimalkan'
+        'EA': 'Evolutionary Algorithm (Algoritma Evolusioner) - Ensemble yang dioptimalkan'
     }
     
     for category, models in model_categories.items():
@@ -1336,6 +1336,6 @@ st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
     <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan oleh Dr. Adipandang Yudono (Scrypt, Sistem Arsitektur, WebGIS Analytics)</p>
     <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan</p>
-    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Adipandang Yudono </p>
+    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Catatan GIS Programmer Pinggir Kali </p>
 </div>
 """, unsafe_allow_html=True)
