@@ -156,10 +156,12 @@ with st.sidebar:
     st.subheader("🗺️ Pilih Basemap")
     basemap_options = {
         "OpenStreetMap": "OpenStreetMap",
-        "Satellite": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "Satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         "Terrain": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
         "Dark Matter": "CartoDB dark_matter",
-        "Positron": "CartoDB positron"
+        "Positron": "CartoDB positron",
+        "Watercolor": "Stamen Watercolor",
+        "Toner": "Stamen Toner"
     }
     selected_basemap = st.selectbox("Pilih jenis peta dasar", list(basemap_options.keys()))
     
@@ -188,6 +190,7 @@ with st.sidebar:
         cross_validation = st.number_input("Lipatan validasi silang", 2, 10, 5)
         max_grid_points = st.number_input("Titik grid maksimum", 1000, 50000, 10000,
                                          help="Jumlah maksimum titik grid")
+        show_prediction_map = st.checkbox("Tampilkan peta prediksi dengan basemap", value=True)
 
 # Main content area - INDONESIA
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -660,7 +663,7 @@ class LandCoverAnalyzer:
 
 
 # Fungsi untuk membuat peta folium dengan basemap
-def create_folium_map(gdf, year, basemap_type="OpenStreetMap", center=None):
+def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None):
     """Create Folium map with basemap for GeoJSON visualization"""
     if gdf is None or len(gdf) == 0:
         return None
@@ -685,6 +688,10 @@ def create_folium_map(gdf, year, basemap_type="OpenStreetMap", center=None):
         m = folium.Map(location=center, zoom_start=12, tiles='CartoDB dark_matter')
     elif basemap_type == "Positron":
         m = folium.Map(location=center, zoom_start=12, tiles='CartoDB positron')
+    elif basemap_type == "Watercolor":
+        m = folium.Map(location=center, zoom_start=12, tiles='Stamen Watercolor')
+    elif basemap_type == "Toner":
+        m = folium.Map(location=center, zoom_start=12, tiles='Stamen Toner')
     else:
         m = folium.Map(location=center, zoom_start=12)
     
@@ -702,7 +709,7 @@ def create_folium_map(gdf, year, basemap_type="OpenStreetMap", center=None):
     # Add GeoJSON to map
     folium.GeoJson(
         gdf,
-        name=f'Tutupan Lahan {year}',
+        name=title,
         style_function=lambda feature: {
             'fillColor': get_color(feature['properties']['gridcode']),
             'color': 'black',
@@ -710,27 +717,60 @@ def create_folium_map(gdf, year, basemap_type="OpenStreetMap", center=None):
             'fillOpacity': 0.7
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=['gridcode', 'LandCover'],
-            aliases=['Kode', 'Tutupan Lahan'],
+            fields=['gridcode', 'LandCover', 'confidence'] if 'confidence' in gdf.columns else ['gridcode', 'LandCover'],
+            aliases=['Kode', 'Tutupan Lahan', 'Kepercayaan'] if 'confidence' in gdf.columns else ['Kode', 'Tutupan Lahan'],
             localize=True
         )
     ).add_to(m)
     
     # Add legend
     legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border-radius: 5px; border: 2px solid grey;">
+    <div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border-radius: 5px; border: 2px solid grey; box-shadow: 3px 3px 5px rgba(0,0,0,0.3);">
         <p><strong>Legenda Tutupan Lahan</strong></p>
-        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block;"></span> Badan Air</p>
-        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block;"></span> Lahan Terbuka</p>
-        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block;"></span> Bangunan</p>
+        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air</p>
+        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka</p>
+        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Bangunan</p>
     </div>
     '''
     m.get_root().html.add_child(folium.Element(legend_html))
+    
+    # Add fullscreen button
+    folium.plugins.Fullscreen().add_to(m)
     
     # Add layer control
     folium.LayerControl().add_to(m)
     
     return m
+
+# Fungsi untuk mengkonversi grid predictions ke GeoDataFrame
+def predictions_to_geodataframe(predictions, confidences, x_coords, y_coords, sample_step=1):
+    """Convert prediction grid to GeoDataFrame"""
+    geometries = []
+    properties = []
+    
+    pred_reshaped = predictions.reshape(len(y_coords), len(x_coords))
+    conf_reshaped = confidences.reshape(len(y_coords), len(x_coords))
+    
+    for i, y in enumerate(y_coords):
+        for j, x in enumerate(x_coords):
+            if (i * len(x_coords) + j) % sample_step == 0:
+                cell_size_x = (x_coords[-1] - x_coords[0]) / len(x_coords)
+                cell_size_y = (y_coords[-1] - y_coords[0]) / len(y_coords)
+                
+                geom = box(x - cell_size_x/2, y - cell_size_y/2,
+                          x + cell_size_x/2, y + cell_size_y/2)
+                
+                pred_class = int(pred_reshaped[i, j])
+                class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
+                
+                geometries.append(geom)
+                properties.append({
+                    'gridcode': pred_class,
+                    'LandCover': class_name,
+                    'confidence': float(conf_reshaped[i, j])
+                })
+    
+    return gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
 
 # Initialize analyzer
 analyzer = LandCoverAnalyzer()
@@ -847,7 +887,7 @@ with tab1:
                                 center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
                                 
                                 # Create map
-                                m = create_folium_map(gdf_reclass, year, selected_basemap, center)
+                                m = create_folium_map(gdf_reclass, f'Tutupan Lahan {year}', selected_basemap, center)
                                 if m is not None:
                                     folium_static(m, width=800, height=500)
                                 
@@ -1299,21 +1339,50 @@ with tab4:
                     
                     status_text.text("✅ Prediksi selesai!")
                     
-                    # Visualization
-                    st.subheader("🗺️ Peta Prediksi")
+                    # ========== VISUALISASI DENGAN BASEMAP ==========
+                    if show_prediction_map:
+                        st.subheader("🗺️ Peta Prediksi dengan Basemap")
+                        
+                        # Pilih scenario untuk ditampilkan di peta
+                        selected_scenario = st.selectbox(
+                            "Pilih skenario untuk ditampilkan di peta",
+                            options=list(all_predictions.keys()),
+                            format_func=lambda x: all_predictions[x]['display_name']
+                        )
+                        
+                        if selected_scenario:
+                            pred_data = all_predictions[selected_scenario]
+                            
+                            # Konversi ke GeoDataFrame dengan sampling
+                            sample_step = max(1, len(y_coords) * len(x_coords) // 2000)  # Sampling untuk performa
+                            pred_gdf = predictions_to_geodataframe(
+                                pred_data['predictions'], 
+                                pred_data['confidences'],
+                                x_coords, y_coords, 
+                                sample_step
+                            )
+                            
+                            # Hitung center
+                            center = [(y_coords[0] + y_coords[-1]) / 2, (x_coords[0] + x_coords[-1]) / 2]
+                            
+                            # Buat peta
+                            m = create_folium_map(
+                                pred_gdf, 
+                                f"Prediksi {selected_year} Tahun - {all_predictions[selected_scenario]['display_name']}",
+                                selected_basemap, 
+                                center
+                            )
+                            
+                            if m is not None:
+                                folium_static(m, width=1000, height=600)
+                            
+                            # Tampilkan statistik
+                            st.info(f"Menampilkan {len(pred_gdf)} dari {len(pred_data['predictions'])} titik prediksi (sampling untuk performa)")
                     
-                    # Create color mapping for predictions
-                    def get_prediction_color(pred_class):
-                        if pred_class == 1:
-                            return '#3498db'  # Blue - Water
-                        elif pred_class == 2:
-                            return '#f1c40f'  # Yellow - Open Land
-                        elif pred_class == 3:
-                            return '#e74c3c'  # Red - Built-up
-                        else:
-                            return '#95a5a6'  # Grey
+                    # Visualization dengan matplotlib (opsional)
+                    st.subheader("🗺️ Visualisasi Grid Prediksi")
                     
-                    # Pilih tab untuk visualisasi
+                    # Pilih tab untuk visualisasi matplotlib
                     viz_tabs = st.tabs([data['display_name'] for data in all_predictions.values()][:4])
                     
                     for idx, (scenario_name, pred_data) in enumerate(list(all_predictions.items())[:4]):
@@ -1441,42 +1510,19 @@ with tab5:
                 if st.button(f"🗺️ Generate GeoJSON untuk {display_name}", key=f"btn_{scenario_name}"):
                     with st.spinner("⏳ Menghasilkan GeoJSON..."):
                         # Create GeoDataFrame dengan sampling
-                        geometries = []
-                        properties = []
-                        
                         x_coords = grid_info['x_coords']
                         y_coords = grid_info['y_coords']
                         
-                        pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
-                        conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
-                        
                         # Sampling untuk GeoJSON
                         sample_step = max(1, len(y_coords) * len(x_coords) // 1000)
-                        point_count = 0
+                        pred_gdf = predictions_to_geodataframe(
+                            pred_data['predictions'], 
+                            pred_data['confidences'],
+                            x_coords, y_coords, 
+                            sample_step
+                        )
                         
-                        for i, y in enumerate(y_coords):
-                            for j, x in enumerate(x_coords):
-                                if point_count % sample_step == 0:
-                                    cell_size_x = (x_coords[-1] - x_coords[0]) / len(x_coords)
-                                    cell_size_y = (y_coords[-1] - y_coords[0]) / len(y_coords)
-                                    
-                                    geom = box(x - cell_size_x/2, y - cell_size_y/2,
-                                              x + cell_size_x/2, y + cell_size_y/2)
-                                    
-                                    pred_class = int(pred_reshaped[i, j])
-                                    class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
-                                    
-                                    geometries.append(geom)
-                                    properties.append({
-                                        'gridcode': pred_class,
-                                        'land_cover': class_name,
-                                        'confidence': float(conf_reshaped[i, j])
-                                    })
-                                point_count += 1
-                        
-                        if geometries:
-                            pred_gdf = gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
-                            
+                        if len(pred_gdf) > 0:
                             geojson_str = pred_gdf.to_json()
                             st.download_button(
                                 label=f"📥 Unduh {display_name} (GeoJSON)",
@@ -1486,6 +1532,8 @@ with tab5:
                                 key=f"geojson_{scenario_name}",
                                 use_container_width=True
                             )
+                            
+                            st.info(f"📊 Mengekspor {len(pred_gdf)} dari {len(pred_data['predictions'])} titik (sampling)")
         
         with col2:
             st.markdown("### 📊 Galeri Visualisasi")
