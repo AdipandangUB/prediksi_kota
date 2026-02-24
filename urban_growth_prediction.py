@@ -46,7 +46,7 @@ N_TEMPORAL_FEATURES = N_FEATURES * 3  # current + future + diff = 45
 
 # Set page config
 st.set_page_config(
-    page_title="Land Cover Change Analysis & Prediction",
+    page_title="Sistem Analisis & Prediksi Perubahan Tutupan Lahan",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -75,6 +75,9 @@ st.markdown("""
         border-radius: 10px;
         text-align: center;
     }
+    .indonesian-header {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,44 +93,44 @@ if 'grid_cache' not in st.session_state:
 if 'feature_dim' not in st.session_state:
     st.session_state.feature_dim = N_TEMPORAL_FEATURES
 
-# Title with animation
-st.title("🌍 Advanced Land Cover Change Analysis & Prediction System")
+# Title with animation - INDONESIA
+st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
 st.markdown("""
-<div style='background-color: #f0f8ff; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
-    <h4>📊 Analyze historical land cover changes and predict future scenarios using 12 advanced ML models</h4>
-    <p>Upload at least 2 GeoJSON files from different years to detect change patterns</p>
+<div style='background-color: #e6f3ff; padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #4CAF50;'>
+    <h4 style='color: #2c3e50;'>📊 Analisis perubahan tutupan lahan historis dan prediksi skenario masa depan menggunakan 12 model ML canggih</h4>
+    <p style='color: #34495e;'>Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk mendeteksi pola perubahan</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar for configuration
+# Sidebar for configuration - INDONESIA
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("⚙️ Konfigurasi")
     
-    # Model selection with tooltips
-    st.subheader("🤖 Select Models")
+    # Model selection with tooltips - INDONESIA
+    st.subheader("🤖 Pilih Model")
     
     model_categories = {
-        "Neural Networks": ['ANN', 'MLP'],
-        "Tree-based": ['DT', 'RF', 'GBM'],
-        "Statistical": ['LR', 'NB'],
-        "Instance-based": ['KNN', 'SVM'],
-        "Advanced": ['MC', 'FL', 'EA']
+        "Jaringan Saraf": ['ANN', 'MLP'],
+        "Berbasis Pohon": ['DT', 'RF', 'GBM'],
+        "Statistik": ['LR', 'NB'],
+        "Berbasis Instance": ['KNN', 'SVM'],
+        "Lanjutan": ['MC', 'FL', 'EA']
     }
     
     selected_models = []
     model_descriptions = {
-        'ANN': 'Artificial Neural Network - Deep learning model for complex patterns',
-        'LR': 'Logistic Regression - Baseline statistical model',
-        'MC': 'Markov Chain - Temporal transition probability model',
-        'FL': 'Fuzzy Logic - Handles uncertainty in classifications',
-        'DT': 'Decision Tree - Interpretable rule-based model',
-        'SVM': 'Support Vector Machine - Maximum margin classification',
-        'RF': 'Random Forest - Ensemble of decision trees',
-        'GBM': 'Gradient Boosting - Sequential ensemble learning',
-        'MLP': 'Multi-Layer Perceptron - Feedforward neural network',
-        'KNN': 'K-Nearest Neighbors - Spatial proximity based',
-        'NB': 'Naive Bayes - Probabilistic classifier',
-        'EA': 'Evolutionary Algorithm - Optimized ensemble'
+        'ANN': 'Jaringan Saraf Tiruan - Model deep learning untuk pola kompleks',
+        'LR': 'Regresi Logistik - Model statistik dasar',
+        'MC': 'Rantai Markov - Model probabilitas transisi temporal',
+        'FL': 'Logika Fuzzy - Menangani ketidakpastian dalam klasifikasi',
+        'DT': 'Pohon Keputusan - Model berbasis aturan yang dapat diinterpretasi',
+        'SVM': 'Support Vector Machine - Klasifikasi margin maksimum',
+        'RF': 'Random Forest - Ensemble dari pohon keputusan',
+        'GBM': 'Gradient Boosting - Pembelajaran ensemble sekuensial',
+        'MLP': 'Multi-Layer Perceptron - Jaringan saraf feedforward',
+        'KNN': 'K-Nearest Neighbors - Berbasis kedekatan spasial',
+        'NB': 'Naive Bayes - Pengklasifikasi probabilistik',
+        'EA': 'Algoritma Evolusioner - Ensemble yang dioptimalkan'
     }
     
     for category, models in model_categories.items():
@@ -139,44 +142,44 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Time periods
-    st.header("⏰ Prediction Periods")
+    # Time periods - INDONESIA
+    st.header("⏰ Periode Prediksi")
     years_options = st.multiselect(
-        "Select prediction years",
+        "Pilih tahun prediksi",
         options=[25, 50, 75, 100],
         default=[25, 50, 100],
-        help="Number of years into the future to predict"
+        help="Jumlah tahun ke depan untuk diprediksi"
     )
     
-    # Scenarios
-    st.header("🎯 Scenarios")
-    without_policy = st.checkbox("Without Policy (Natural Growth)", value=True)
-    with_policy = st.checkbox("With Policy (Water Body Protection)", value=True)
+    # Scenarios - INDONESIA
+    st.header("🎯 Skenario")
+    without_policy = st.checkbox("Tanpa Kebijakan (Pertumbuhan Alami)", value=True)
+    with_policy = st.checkbox("Dengan Kebijakan (Perlindungan Badan Air)", value=True)
     
-    # Advanced settings
-    with st.expander("🔧 Advanced Settings"):
-        cell_size = st.slider("Cell size (degrees)", 0.001, 0.05, 0.01, 
-                              help="Resolution of prediction grid")
-        confidence_threshold = st.slider("Confidence threshold", 0.5, 0.95, 0.7,
-                                        help="Minimum confidence for predictions")
-        cross_validation = st.number_input("Cross-validation folds", 2, 10, 5)
-        max_grid_points = st.number_input("Max grid points", 1000, 50000, 10000,
-                                         help="Maximum number of grid points")
+    # Advanced settings - INDONESIA
+    with st.expander("🔧 Pengaturan Lanjutan"):
+        cell_size = st.slider("Ukuran sel (derajat)", 0.001, 0.05, 0.01, 
+                              help="Resolusi grid prediksi")
+        confidence_threshold = st.slider("Batas kepercayaan", 0.5, 0.95, 0.7,
+                                        help="Kepercayaan minimum untuk prediksi")
+        cross_validation = st.number_input("Lipatan validasi silang", 2, 10, 5)
+        max_grid_points = st.number_input("Titik grid maksimum", 1000, 50000, 10000,
+                                         help="Jumlah maksimum titik grid")
 
-# Main content area
+# Main content area - INDONESIA
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📤 Data Upload & Processing", 
-    "📊 Historical Analysis", 
-    "🤖 Model Training", 
-    "🔮 Future Predictions",
-    "📈 Reports & Export"
+    "📤 Unggah & Proses Data", 
+    "📊 Analisis Historis", 
+    "🤖 Pelatihan Model", 
+    "🔮 Prediksi Masa Depan",
+    "📈 Laporan & Ekspor"
 ])
 
-# Define land cover classes based on the data
+# Define land cover classes based on the data - INDONESIA
 land_cover_classes = {
-    1: {"name": "Badan Air (Water Body)", "color": "#3498db", "type": "water"},
-    2: {"name": "Vegetasi Rapat (Dense Vegetation)", "color": "#27ae60", "type": "vegetation"},
-    3: {"name": "Vegetasi Jarang (Sparse Vegetation)", "color": "#f1c40f", "type": "vegetation"}
+    1: {"name": "Badan Air", "color": "#3498db", "type": "water", "description": "Sungai, danau, waduk"},
+    2: {"name": "Vegetasi Rapat", "color": "#27ae60", "type": "vegetation", "description": "Hutan, perkebunan lebat"},
+    3: {"name": "Vegetasi Jarang", "color": "#f1c40f", "type": "vegetation", "description": "Semak, lahan terbuka"}
 }
 
 class LandCoverAnalyzer:
@@ -204,7 +207,7 @@ class LandCoverAnalyzer:
             required_cols = ['gridcode', 'LandCover', 'geometry']
             missing = [col for col in required_cols if col not in gdf.columns]
             if missing:
-                st.error(f"Missing columns in {year} data: {missing}")
+                st.error(f"Kolom yang hilang dalam data {year}: {missing}")
                 return None
             
             # Ensure valid geometries
@@ -216,7 +219,7 @@ class LandCoverAnalyzer:
             
             return gdf
         except Exception as e:
-            st.error(f"Error loading {year} data: {str(e)}")
+            st.error(f"Error memuat data {year}: {str(e)}")
             return None
     
     def extract_features(self, geometry):
@@ -471,22 +474,22 @@ class LandCoverAnalyzer:
             land_cover = ctrl.Consequent(np.arange(1, 4, 0.1), 'land_cover')
             
             # Define membership functions
-            x_pos['low'] = fuzz.trimf(x_pos.universe, [0, 0, 0.5])
-            x_pos['high'] = fuzz.trimf(x_pos.universe, [0.5, 1, 1])
+            x_pos['rendah'] = fuzz.trimf(x_pos.universe, [0, 0, 0.5])
+            x_pos['tinggi'] = fuzz.trimf(x_pos.universe, [0.5, 1, 1])
             
-            y_pos['low'] = fuzz.trimf(y_pos.universe, [0, 0, 0.5])
-            y_pos['high'] = fuzz.trimf(y_pos.universe, [0.5, 1, 1])
+            y_pos['rendah'] = fuzz.trimf(y_pos.universe, [0, 0, 0.5])
+            y_pos['tinggi'] = fuzz.trimf(y_pos.universe, [0.5, 1, 1])
             
-            area['small'] = fuzz.trimf(area.universe, [0, 0, 0.5])
-            area['large'] = fuzz.trimf(area.universe, [0.5, 1, 1])
+            area['kecil'] = fuzz.trimf(area.universe, [0, 0, 0.5])
+            area['besar'] = fuzz.trimf(area.universe, [0.5, 1, 1])
             
-            land_cover['water'] = fuzz.trimf(land_cover.universe, [1, 1, 2])
-            land_cover['veg'] = fuzz.trimf(land_cover.universe, [2, 3, 3])
+            land_cover['air'] = fuzz.trimf(land_cover.universe, [1, 1, 2])
+            land_cover['vegetasi'] = fuzz.trimf(land_cover.universe, [2, 3, 3])
             
             # Simplified rules
             rules = [
-                ctrl.Rule(x_pos['low'] & y_pos['low'] & area['small'], land_cover['veg']),
-                ctrl.Rule(x_pos['high'] & y_pos['high'] & area['large'], land_cover['water']),
+                ctrl.Rule(x_pos['rendah'] & y_pos['rendah'] & area['kecil'], land_cover['vegetasi']),
+                ctrl.Rule(x_pos['tinggi'] & y_pos['tinggi'] & area['besar'], land_cover['air']),
             ]
             
             land_cover_ctrl = ctrl.ControlSystem(rules)
@@ -508,10 +511,9 @@ class LandCoverAnalyzer:
         ensemble.fit(X_train, y_train)
         return ensemble
     
-    # ========== FIXED PREDICT FUTURE METHOD ==========
     def predict_future(self, model_name, model, grid_points, years, transition_matrix=None, 
                       with_policy=False, batch_size=1000):
-        """Predict future land cover - FIXED VERSION"""
+        """Predict future land cover"""
         predictions = np.zeros(len(grid_points), dtype=int)
         confidences = np.zeros(len(grid_points))
         
@@ -587,50 +589,54 @@ class LandCoverAnalyzer:
                 confidences[i + j] = confidence
         
         return predictions, confidences
-    # ========== END OF FIXED METHOD ==========
 
 # Initialize analyzer
 analyzer = LandCoverAnalyzer()
 
-# Tab 1: Data Upload
+# ========== TAB 1: UNGGAH DATA ==========
 with tab1:
-    st.header("📤 Upload Historical Data")
-    st.markdown("Upload at least 2 GeoJSON files from different years to analyze change patterns")
+    st.header("📤 Unggah Data Historis")
+    st.markdown("""
+    <div style='background-color: #fff8e7; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
+        <p>📌 Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk menganalisis pola perubahan</p>
+        <p>🗂️ Format file: <strong>GeoJSON</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
+    </div>
+    """, unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("File 1 (Earliest Year)")
-        file1 = st.file_uploader("Choose first GeoJSON", type=['geojson'], key='file1')
-        year1 = st.number_input("Year for File 1", min_value=1900, max_value=2100, 
+        st.subheader("📁 File 1 (Tahun Terdahulu)")
+        file1 = st.file_uploader("Pilih GeoJSON pertama", type=['geojson'], key='file1')
+        year1 = st.number_input("Tahun untuk File 1", min_value=1900, max_value=2100, 
                                 value=2015, step=1, key='year1')
         
     with col2:
-        st.subheader("File 2 (Latest Year)")
-        file2 = st.file_uploader("Choose second GeoJSON", type=['geojson'], key='file2')
-        year2 = st.number_input("Year for File 2", min_value=1900, max_value=2100, 
+        st.subheader("📁 File 2 (Tahun Terbaru)")
+        file2 = st.file_uploader("Pilih GeoJSON kedua", type=['geojson'], key='file2')
+        year2 = st.number_input("Tahun untuk File 2", min_value=1900, max_value=2100, 
                                 value=2020, step=1, key='year2')
     
     # Option for additional files
-    with st.expander("➕ Add more files (optional)"):
+    with st.expander("➕ Tambah file lainnya (opsional)"):
         additional_files = []
         additional_years = []
         for i in range(3):
             col1, col2 = st.columns(2)
             with col1:
-                file = st.file_uploader(f"Additional File {i+1}", type=['geojson'], 
+                file = st.file_uploader(f"File Tambahan {i+1}", type=['geojson'], 
                                         key=f'file_add_{i}')
             with col2:
-                year = st.number_input(f"Year for File {i+1}", min_value=1900, max_value=2100,
+                year = st.number_input(f"Tahun untuk File {i+1}", min_value=1900, max_value=2100,
                                        value=2010 + i*5, step=1, key=f'year_add_{i}')
             if file and year:
                 additional_files.append((file, year))
     
-    if st.button("📥 Process Uploaded Data", type="primary"):
+    if st.button("📥 Proses Data yang Diunggah", type="primary", use_container_width=True):
         if not file1 or not file2:
-            st.error("Please upload at least 2 files")
+            st.error("⚠️ Harap unggah minimal 2 file")
         else:
-            with st.spinner("Processing data..."):
+            with st.spinner("⏳ Memproses data..."):
                 # Load files
                 gdf1 = analyzer.load_geojson(file1, year1)
                 gdf2 = analyzer.load_geojson(file2, year2)
@@ -658,33 +664,33 @@ with tab1:
                         max(b[3] for b in all_bounds)
                     ]
                     
-                    st.success(f"✅ Successfully loaded {len(analyzer.gdfs)} files from years: {analyzer.years}")
+                    st.success(f"✅ Berhasil memuat {len(analyzer.gdfs)} file dari tahun: {', '.join(map(str, analyzer.years))}")
                     
                     # Show data summary
-                    st.subheader("📊 Data Summary")
+                    st.subheader("📊 Ringkasan Data")
                     summary_data = []
                     for year, gdf in analyzer.gdfs.items():
                         summary_data.append({
-                            'Year': year,
-                            'Features': len(gdf),
-                            'Water Bodies': len(gdf[gdf['gridcode'] == 1]),
-                            'Dense Vegetation': len(gdf[gdf['gridcode'] == 2]),
-                            'Sparse Vegetation': len(gdf[gdf['gridcode'] == 3]),
-                            'Area (sq deg)': f"{gdf.geometry.area.sum():.4f}"
+                            'Tahun': year,
+                            'Fitur': len(gdf),
+                            'Badan Air': len(gdf[gdf['gridcode'] == 1]),
+                            'Vegetasi Rapat': len(gdf[gdf['gridcode'] == 2]),
+                            'Vegetasi Jarang': len(gdf[gdf['gridcode'] == 3]),
+                            'Luas (derajat²)': f"{gdf.geometry.area.sum():.4f}"
                         })
                     
                     summary_df = pd.DataFrame(summary_data)
-                    st.dataframe(summary_df, use_container_width=True)
+                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
                     
                     # Store in session state
                     st.session_state.historical_data = analyzer
 
-# Tab 2: Historical Analysis
+# ========== TAB 2: ANALISIS HISTORIS ==========
 with tab2:
-    st.header("📊 Historical Change Analysis")
+    st.header("📊 Analisis Perubahan Historis")
     
     if st.session_state.historical_data is None:
-        st.warning("Please upload and process data in the Data Upload tab first")
+        st.warning("⚠️ Harap unggah dan proses data terlebih dahulu di tab 'Unggah & Proses Data'")
     else:
         analyzer = st.session_state.historical_data
         
@@ -708,11 +714,11 @@ with tab2:
             
             # Calculate change statistics
             changes = {
-                'Period': f"{year1}-{year2}",
-                'Years': year2 - year1,
-                'Water Change': len(gdf2[gdf2['gridcode'] == 1]) - len(gdf1[gdf1['gridcode'] == 1]),
-                'Dense Veg Change': len(gdf2[gdf2['gridcode'] == 2]) - len(gdf1[gdf1['gridcode'] == 2]),
-                'Sparse Veg Change': len(gdf2[gdf2['gridcode'] == 3]) - len(gdf1[gdf1['gridcode'] == 3]),
+                'Periode': f"{year1}-{year2}",
+                'Tahun': year2 - year1,
+                'Perubahan Air': len(gdf2[gdf2['gridcode'] == 1]) - len(gdf1[gdf1['gridcode'] == 1]),
+                'Perubahan Veg. Rapat': len(gdf2[gdf2['gridcode'] == 2]) - len(gdf1[gdf1['gridcode'] == 2]),
+                'Perubahan Veg. Jarang': len(gdf2[gdf2['gridcode'] == 3]) - len(gdf1[gdf1['gridcode'] == 3]),
             }
             change_data.append(changes)
         
@@ -722,63 +728,63 @@ with tab2:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("📈 Change Statistics")
-            st.dataframe(change_df, use_container_width=True)
+            st.subheader("📈 Statistik Perubahan")
+            st.dataframe(change_df, use_container_width=True, hide_index=True)
             
             # Calculate annual change rates
-            st.subheader("📉 Annual Change Rates")
+            st.subheader("📉 Laju Perubahan Tahunan")
             annual_rates = change_df.copy()
-            for col in ['Water Change', 'Dense Veg Change', 'Sparse Veg Change']:
-                annual_rates[f'{col} Rate'] = (annual_rates[col] / annual_rates['Years']).round(2)
+            for col in ['Perubahan Air', 'Perubahan Veg. Rapat', 'Perubahan Veg. Jarang']:
+                annual_rates[f'Laju {col}'] = (annual_rates[col] / annual_rates['Tahun']).round(2)
             
-            st.dataframe(annual_rates[['Period', 'Water Change Rate', 'Dense Veg Change Rate', 
-                                      'Sparse Veg Change Rate']], use_container_width=True)
+            st.dataframe(annual_rates[['Periode', 'Laju Perubahan Air', 'Laju Perubahan Veg. Rapat', 
+                                      'Laju Perubahan Veg. Jarang']], use_container_width=True, hide_index=True)
         
         with col2:
-            st.subheader("🔄 Transition Matrices")
+            st.subheader("🔄 Matriks Transisi")
             for tm in transition_matrices:
-                with st.expander(f"Transition Matrix {tm['years']}"):
+                with st.expander(f"Matriks Transisi {tm['years']}"):
                     fig, ax = plt.subplots(figsize=(8, 6))
                     sns.heatmap(tm['matrix'], annot=True, fmt='.2f', cmap='YlOrRd',
                                xticklabels=tm['classes'], yticklabels=tm['classes'],
                                ax=ax)
-                    ax.set_xlabel('To Class')
-                    ax.set_ylabel('From Class')
-                    ax.set_title(f'Transition Probabilities {tm["years"]}')
+                    ax.set_xlabel('Ke Kelas')
+                    ax.set_ylabel('Dari Kelas')
+                    ax.set_title(f'Probabilitas Transisi {tm["years"]}')
                     st.pyplot(fig)
         
         # Visualization of changes over time
-        st.subheader("📊 Land Cover Evolution")
+        st.subheader("📊 Evolusi Tutupan Lahan")
         
         # Prepare data for plotting
         plot_data = []
         for year, gdf in analyzer.gdfs.items():
             counts = gdf['gridcode'].value_counts()
             plot_data.append({
-                'Year': year,
-                'Water': counts.get(1, 0),
-                'Dense Vegetation': counts.get(2, 0),
-                'Sparse Vegetation': counts.get(3, 0)
+                'Tahun': year,
+                'Air': counts.get(1, 0),
+                'Vegetasi Rapat': counts.get(2, 0),
+                'Vegetasi Jarang': counts.get(3, 0)
             })
         
         plot_df = pd.DataFrame(plot_data)
         
         # Create interactive plot
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=plot_df['Year'], y=plot_df['Water'],
-                                 mode='lines+markers', name='Water',
+        fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Air'],
+                                 mode='lines+markers', name='Air',
                                  line=dict(color='#3498db', width=3)))
-        fig.add_trace(go.Scatter(x=plot_df['Year'], y=plot_df['Dense Vegetation'],
-                                 mode='lines+markers', name='Dense Vegetation',
+        fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Rapat'],
+                                 mode='lines+markers', name='Vegetasi Rapat',
                                  line=dict(color='#27ae60', width=3)))
-        fig.add_trace(go.Scatter(x=plot_df['Year'], y=plot_df['Sparse Vegetation'],
-                                 mode='lines+markers', name='Sparse Vegetation',
+        fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Jarang'],
+                                 mode='lines+markers', name='Vegetasi Jarang',
                                  line=dict(color='#f1c40f', width=3)))
         
         fig.update_layout(
-            title='Land Cover Evolution Over Time',
-            xaxis_title='Year',
-            yaxis_title='Number of Features',
+            title='Evolusi Tutupan Lahan dari Waktu ke Waktu',
+            xaxis_title='Tahun',
+            yaxis_title='Jumlah Fitur',
             hovermode='x unified',
             template='plotly_white'
         )
@@ -788,22 +794,27 @@ with tab2:
         # Store transition matrices for later use
         analyzer.transition_matrices = transition_matrices
 
-# Tab 3: Model Training
+# ========== TAB 3: PELATIHAN MODEL ==========
 with tab3:
-    st.header("🤖 Model Training & Evaluation")
+    st.header("🤖 Pelatihan & Evaluasi Model")
     
     if st.session_state.historical_data is None:
-        st.warning("Please upload and process data in the Data Upload tab first")
+        st.warning("⚠️ Harap unggah dan proses data terlebih dahulu di tab 'Unggah & Proses Data'")
     else:
         analyzer = st.session_state.historical_data
         
         if not selected_models:
-            st.warning("Please select at least one model in the sidebar")
+            st.warning("⚠️ Harap pilih setidaknya satu model di sidebar")
         else:
-            st.write(f"Selected models: {', '.join(selected_models)}")
+            st.info(f"📋 Model yang dipilih: **{', '.join(selected_models)}**")
             
-            if st.button("🚀 Train Selected Models", type="primary"):
-                with st.spinner("Training models... This may take a few minutes"):
+            # Tampilkan informasi model
+            with st.expander("ℹ️ Detail Model yang Dipilih"):
+                for model in selected_models:
+                    st.markdown(f"- **{model}**: {model_descriptions[model]}")
+            
+            if st.button("🚀 Latih Model yang Dipilih", type="primary", use_container_width=True):
+                with st.spinner("⏳ Melatih model... Ini mungkin memakan waktu beberapa menit"):
                     
                     # Prepare training data from all time periods
                     all_features = []
@@ -813,7 +824,7 @@ with tab3:
                     status_text = st.empty()
                     
                     for i in range(len(analyzer.years) - 1):
-                        status_text.text(f"Extracting features from period {i+1}/{len(analyzer.years)-1}...")
+                        status_text.text(f"📊 Mengekstrak fitur dari periode {i+1}/{len(analyzer.years)-1}...")
                         year1 = analyzer.years[i]
                         year2 = analyzer.years[i + 1]
                         X, y = analyzer.create_temporal_features(
@@ -825,7 +836,7 @@ with tab3:
                         progress_bar.progress((i + 1) / (len(analyzer.years) - 1))
                     
                     if not all_features:
-                        st.error("Could not extract features from data")
+                        st.error("❌ Tidak dapat mengekstrak fitur dari data")
                     else:
                         X = np.vstack(all_features)
                         y = np.concatenate(all_labels)
@@ -849,13 +860,13 @@ with tab3:
                         
                         # Progress tracking
                         progress_bar.progress(0)
-                        status_text.text("Training models...")
+                        status_text.text("🤖 Melatih model...")
                         
                         results = []
                         models_trained = {}
                         
                         for idx, model_name in enumerate(selected_models):
-                            status_text.text(f"Training {model_name}... ({idx+1}/{len(selected_models)})")
+                            status_text.text(f"🤖 Melatih {model_name}... ({idx+1}/{len(selected_models)})")
                             
                             try:
                                 start_time = time.time()
@@ -888,34 +899,34 @@ with tab3:
                                 
                                 results.append({
                                     'Model': model_name,
-                                    'Accuracy': f"{accuracy:.3f}",
-                                    'Training Time (s)': f"{train_time:.1f}",
-                                    'Status': '✅ Success'
+                                    'Akurasi': f"{accuracy:.3f}",
+                                    'Waktu Latih (detik)': f"{train_time:.1f}",
+                                    'Status': '✅ Berhasil'
                                 })
                                 
                             except Exception as e:
                                 results.append({
                                     'Model': model_name,
-                                    'Accuracy': 'N/A',
-                                    'Training Time (s)': 'N/A',
+                                    'Akurasi': 'N/A',
+                                    'Waktu Latih (detik)': 'N/A',
                                     'Status': f'❌ Error: {str(e)[:50]}'
                                 })
                             
                             progress_bar.progress((idx + 1) / len(selected_models))
                         
-                        status_text.text("Training complete!")
+                        status_text.text("✅ Pelatihan selesai!")
                         
                         # Display results
-                        st.subheader("📊 Training Results")
+                        st.subheader("📊 Hasil Pelatihan")
                         results_df = pd.DataFrame(results)
-                        st.dataframe(results_df, use_container_width=True)
+                        st.dataframe(results_df, use_container_width=True, hide_index=True)
                         
                         # Store models
                         analyzer.models = models_trained
                         st.session_state.models_trained = True
                         
                         # Feature importance analysis
-                        st.subheader("🔍 Feature Importance Analysis")
+                        st.subheader("🔍 Analisis Kepentingan Fitur")
                         
                         importance_data = []
                         for model_name, model in models_trained.items():
@@ -934,23 +945,23 @@ with tab3:
                             
                             # Buat feature names sesuai jumlah
                             if actual_n_features == 45:  # 45 features
-                                feature_types = ['Current', 'Future', 'Diff']
-                                base_features = ['X', 'Y', 'Area', 'Perimeter', 'Compactness',
-                                                'Width', 'Height', 'Dispersion', 'Complexity',
-                                                'Clearance', 'Convexity', 'Rectangularity',
-                                                'Erosion', 'Interaction', 'LogArea']
+                                feature_types = ['Sekarang', 'Masa Depan', 'Selisih']
+                                base_features = ['X', 'Y', 'Luas', 'Keliling', 'Kekompakan',
+                                                'Lebar', 'Tinggi', 'Penyebaran', 'Kompleksitas',
+                                                'Jarak Bebas', 'Kecembungan', 'Kepersegian',
+                                                'Erosi', 'Interaksi', 'Log Luas']
                                 
                                 feature_names = []
                                 for f_type in feature_types:
                                     for base in base_features:
-                                        feature_names.append(f"{base}_{f_type}")
+                                        feature_names.append(f"{base} ({f_type})")
                             elif actual_n_features == 15:  # 15 features
-                                feature_names = ['X', 'Y', 'Area', 'Perimeter', 'Compactness',
-                                                'Width', 'Height', 'Dispersion', 'Complexity',
-                                                'Clearance', 'Convexity', 'Rectangularity',
-                                                'Erosion', 'Interaction', 'LogArea']
+                                feature_names = ['X', 'Y', 'Luas', 'Keliling', 'Kekompakan',
+                                                'Lebar', 'Tinggi', 'Penyebaran', 'Kompleksitas',
+                                                'Jarak Bebas', 'Kecembungan', 'Kepersegian',
+                                                'Erosi', 'Interaksi', 'Log Luas']
                             else:
-                                feature_names = [f'F{i+1}' for i in range(actual_n_features)]
+                                feature_names = [f'Fitur {i+1}' for i in range(actual_n_features)]
                             
                             # Plot untuk setiap model secara terpisah
                             for imp in importance_data:
@@ -966,18 +977,18 @@ with tab3:
                                     plot_importances = imp['Importances']
                                 
                                 y_pos = np.arange(len(plot_features))
-                                ax.barh(y_pos, plot_importances)
+                                ax.barh(y_pos, plot_importances, color='#4CAF50')
                                 ax.set_yticks(y_pos)
                                 ax.set_yticklabels(plot_features, fontsize=8)
                                 ax.invert_yaxis()
-                                ax.set_xlabel('Importance')
-                                ax.set_title(f'Feature Importance - {imp["Model"]}')
+                                ax.set_xlabel('Kepentingan')
+                                ax.set_title(f'Kepentingan Fitur - {imp["Model"]}')
                                 
                                 plt.tight_layout()
                                 st.pyplot(fig)
                             
                             # Tampilkan juga dalam bentuk dataframe
-                            st.subheader("📋 Top 10 Features")
+                            st.subheader("📋 10 Fitur Teratas")
                             top_features = []
                             for imp in importance_data:
                                 # Ambil top 10
@@ -986,22 +997,22 @@ with tab3:
                                     if idx < len(feature_names):
                                         top_features.append({
                                             'Model': imp['Model'],
-                                            'Feature': feature_names[idx],
-                                            'Importance': f"{imp['Importances'][idx]:.4f}"
+                                            'Fitur': feature_names[idx],
+                                            'Kepentingan': f"{imp['Importances'][idx]:.4f}"
                                         })
                             
                             if top_features:
                                 top_df = pd.DataFrame(top_features)
-                                st.dataframe(top_df, use_container_width=True)
+                                st.dataframe(top_df, use_container_width=True, hide_index=True)
                         else:
-                            st.info("No feature importance data available for the trained models")
+                            st.info("ℹ️ Tidak ada data kepentingan fitur untuk model yang dilatih")
 
-# Tab 4: Future Predictions
+# ========== TAB 4: PREDIKSI MASA DEPAN ==========
 with tab4:
-    st.header("🔮 Future Land Cover Predictions")
+    st.header("🔮 Prediksi Tutupan Lahan Masa Depan")
     
     if not st.session_state.models_trained:
-        st.warning("Please train models first in the Model Training tab")
+        st.warning("⚠️ Harap latih model terlebih dahulu di tab 'Pelatihan Model'")
     else:
         analyzer = st.session_state.historical_data
         
@@ -1009,26 +1020,28 @@ with tab4:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Prediction Settings")
+            st.subheader("⚙️ Pengaturan Prediksi")
             if years_options:
-                selected_year = st.selectbox("Select prediction year", years_options)
+                selected_year = st.selectbox("Pilih tahun prediksi", years_options, 
+                                            format_func=lambda x: f"{x} tahun ke depan")
             else:
-                st.warning("Please select prediction years in sidebar")
+                st.warning("⚠️ Harap pilih tahun prediksi di sidebar")
                 selected_year = 25
             
         with col2:
-            st.subheader("Model Selection for Prediction")
+            st.subheader("🤖 Pilih Model untuk Prediksi")
             predict_models = st.multiselect(
-                "Choose models to use",
+                "Pilih model yang akan digunakan",
                 options=list(analyzer.models.keys()),
-                default=list(analyzer.models.keys())[:2] if analyzer.models else []
+                default=list(analyzer.models.keys())[:2] if analyzer.models else [],
+                format_func=lambda x: f"{x} - {model_descriptions.get(x, '')}"
             )
         
-        if st.button("🔮 Generate Predictions", type="primary"):
+        if st.button("🔮 Generate Prediksi", type="primary", use_container_width=True):
             if not predict_models:
-                st.warning("Please select at least one model")
+                st.warning("⚠️ Harap pilih setidaknya satu model")
             else:
-                with st.spinner(f"Generating {selected_year}-year predictions..."):
+                with st.spinner(f"⏳ Menghasilkan prediksi {selected_year} tahun ke depan..."):
                     
                     # Update feature dimension
                     analyzer.feature_dim = st.session_state.feature_dim
@@ -1043,7 +1056,7 @@ with tab4:
                         )
                         st.session_state.grid_cache[cache_key] = (grid_points, x_coords, y_coords)
                     
-                    st.info(f"Generated {len(grid_points)} grid points for prediction")
+                    st.info(f"📊 Menghasilkan {len(grid_points)} titik grid untuk prediksi")
                     
                     # Store predictions for visualization
                     all_predictions = {}
@@ -1052,7 +1065,7 @@ with tab4:
                     status_text = st.empty()
                     
                     for idx, model_name in enumerate(predict_models):
-                        status_text.text(f"Predicting with {model_name}... ({idx+1}/{len(predict_models)})")
+                        status_text.text(f"🔮 Memprediksi dengan {model_name}... ({idx+1}/{len(predict_models)})")
                         
                         model = analyzer.models.get(model_name)
                         
@@ -1067,9 +1080,10 @@ with tab4:
                                 model_name, model, grid_points, selected_year, 
                                 transition_matrix, with_policy=False
                             )
-                            all_predictions[f"{model_name}_no_policy"] = {
+                            all_predictions[f"{model_name}_tanpa_kebijakan"] = {
                                 'predictions': pred_no_policy,
-                                'confidences': conf_no_policy
+                                'confidences': conf_no_policy,
+                                'display_name': f"{model_name} - Tanpa Kebijakan"
                             }
                         
                         # Predict with policy
@@ -1078,75 +1092,74 @@ with tab4:
                                 model_name, model, grid_points, selected_year, 
                                 transition_matrix, with_policy=True
                             )
-                            all_predictions[f"{model_name}_with_policy"] = {
+                            all_predictions[f"{model_name}_dengan_kebijakan"] = {
                                 'predictions': pred_with_policy,
-                                'confidences': conf_with_policy
+                                'confidences': conf_with_policy,
+                                'display_name': f"{model_name} - Dengan Kebijakan"
                             }
                         
                         progress_bar.progress((idx + 1) / len(predict_models))
                     
-                    status_text.text("Predictions complete!")
+                    status_text.text("✅ Prediksi selesai!")
                     
                     # Visualization
-                    st.subheader("🗺️ Prediction Maps")
+                    st.subheader("🗺️ Peta Prediksi")
                     
-                    # Hanya tampilkan 4 plot teratas
-                    display_predictions = dict(list(all_predictions.items())[:4])
+                    # Pilih tab untuk visualisasi
+                    viz_tabs = st.tabs([data['display_name'] for data in all_predictions.values()][:4])
                     
-                    n_plots = len(display_predictions)
-                    if n_plots > 0:
-                        n_cols = min(2, n_plots)
-                        n_rows = (n_plots + n_cols - 1) // n_cols
-                        
-                        fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 5 * n_rows))
-                        if n_rows == 1 and n_cols == 1:
-                            axes = np.array([[axes]])
-                        elif n_rows == 1:
-                            axes = axes.reshape(1, -1)
-                        
-                        for plot_idx, (scenario_name, pred_data) in enumerate(display_predictions.items()):
-                            row = plot_idx // n_cols
-                            col = plot_idx % n_cols
-                            
+                    for idx, (scenario_name, pred_data) in enumerate(list(all_predictions.items())[:4]):
+                        with viz_tabs[idx]:
                             pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
+                            conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
                             
-                            im = axes[row, col].imshow(pred_reshaped, cmap='RdYlGn',
-                                                       extent=[x_coords[0], x_coords[-1],
-                                                               y_coords[0], y_coords[-1]],
-                                                       origin='lower', aspect='auto')
-                            axes[row, col].set_title(scenario_name.replace('_', ' ').title())
-                            axes[row, col].set_xlabel('Longitude')
-                            axes[row, col].set_ylabel('Latitude')
-                        
-                        # Hide empty subplots
-                        for plot_idx in range(len(display_predictions), n_rows * n_cols):
-                            row = plot_idx // n_cols
-                            col = plot_idx % n_cols
-                            if row < n_rows and col < n_cols:
-                                axes[row, col].axis('off')
-                        
-                        plt.tight_layout()
-                        st.pyplot(fig)
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                fig, ax = plt.subplots(figsize=(8, 6))
+                                im = ax.imshow(pred_reshaped, cmap='RdYlGn',
+                                              extent=[x_coords[0], x_coords[-1],
+                                                      y_coords[0], y_coords[-1]],
+                                              origin='lower', aspect='auto')
+                                plt.colorbar(im, ax=ax, label='Kelas Tutupan Lahan')
+                                ax.set_title('Prediksi Tutupan Lahan')
+                                ax.set_xlabel('Bujur')
+                                ax.set_ylabel('Lintang')
+                                st.pyplot(fig)
+                            
+                            with col2:
+                                fig, ax = plt.subplots(figsize=(8, 6))
+                                im = ax.imshow(conf_reshaped, cmap='RdYlGn',
+                                              extent=[x_coords[0], x_coords[-1],
+                                                      y_coords[0], y_coords[-1]],
+                                              origin='lower', aspect='auto', vmin=0, vmax=1)
+                                plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
+                                ax.set_title('Peta Kepercayaan')
+                                ax.set_xlabel('Bujur')
+                                ax.set_ylabel('Lintang')
+                                st.pyplot(fig)
                     
                     # Statistics
-                    st.subheader("📊 Prediction Statistics")
+                    st.subheader("📊 Statistik Prediksi")
                     
                     stats_data = []
                     for scenario_name, pred_data in all_predictions.items():
                         unique, counts = np.unique(pred_data['predictions'], return_counts=True)
+                        percentages = counts / len(pred_data['predictions']) * 100
+                        
                         stats = {
-                            'Scenario': scenario_name.replace('_', ' ').title(),
-                            'Total Predictions': len(pred_data['predictions']),
-                            'Avg Confidence': f"{np.mean(pred_data['confidences']):.3f}"
+                            'Skenario': pred_data.get('display_name', scenario_name.replace('_', ' ').title()),
+                            'Total Prediksi': len(pred_data['predictions']),
+                            'Rata-rata Kepercayaan': f"{np.mean(pred_data['confidences']):.3f}"
                         }
                         
-                        for u, c in zip(unique, counts):
-                            stats[land_cover_classes.get(u, {}).get('name', f'Class {u}')] = c
+                        for u, c, p in zip(unique, counts, percentages):
+                            stats[land_cover_classes.get(u, {}).get('name', f'Kelas {u}')] = f"{c} ({p:.1f}%)"
                         
                         stats_data.append(stats)
                     
                     stats_df = pd.DataFrame(stats_data)
-                    st.dataframe(stats_df, use_container_width=True)
+                    st.dataframe(stats_df, use_container_width=True, hide_index=True)
                     
                     # Store predictions for export
                     st.session_state.predictions = all_predictions
@@ -1156,22 +1169,22 @@ with tab4:
                         'bounds': analyzer.bounds
                     }
 
-# Tab 5: Reports & Export
+# ========== TAB 5: LAPORAN & EKSPOR ==========
 with tab5:
-    st.header("📈 Reports & Export")
+    st.header("📈 Laporan & Ekspor")
     
     if 'predictions' not in st.session_state:
-        st.warning("Please generate predictions first in the Future Predictions tab")
+        st.warning("⚠️ Harap generate prediksi terlebih dahulu di tab 'Prediksi Masa Depan'")
     else:
         predictions = st.session_state.predictions
         grid_info = st.session_state.grid_info
         
-        st.subheader("📥 Download Options")
+        st.subheader("📥 Opsi Unduhan")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### 📊 Summary Report")
+            st.markdown("### 📊 Laporan Ringkasan")
             
             # Create comprehensive report
             report_data = []
@@ -1181,11 +1194,11 @@ with tab5:
                 
                 for u, c, p in zip(unique, counts, percentages):
                     report_data.append({
-                        'Scenario': scenario_name.replace('_', ' ').title(),
-                        'Land Cover': land_cover_classes.get(u, {}).get('name', f'Class {u}'),
-                        'Count': c,
-                        'Percentage': f"{p:.2f}%",
-                        'Avg Confidence': f"{np.mean(pred_data['confidences']):.3f}"
+                        'Skenario': pred_data.get('display_name', scenario_name.replace('_', ' ').title()),
+                        'Tutupan Lahan': land_cover_classes.get(u, {}).get('name', f'Kelas {u}'),
+                        'Jumlah': c,
+                        'Persentase': f"{p:.2f}%",
+                        'Rata-rata Kepercayaan': f"{np.mean(pred_data['confidences']):.3f}"
                     })
             
             report_df = pd.DataFrame(report_data)
@@ -1193,18 +1206,20 @@ with tab5:
             # Download buttons
             csv = report_df.to_csv(index=False)
             st.download_button(
-                label="📥 Download Summary Report (CSV)",
+                label="📥 Unduh Laporan Ringkasan (CSV)",
                 data=csv,
-                file_name=f"land_cover_prediction_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
+                file_name=f"laporan_prediksi_tutupan_lahan_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
             )
             
             # Generate GeoJSON for predictions
-            st.markdown("### 🗺️ Export as GeoJSON")
+            st.markdown("### 🗺️ Ekspor sebagai GeoJSON")
             
             for scenario_name, pred_data in list(predictions.items())[:2]:
-                if st.button(f"Generate GeoJSON for {scenario_name.replace('_', ' ').title()}"):
-                    with st.spinner("Generating GeoJSON..."):
+                display_name = pred_data.get('display_name', scenario_name.replace('_', ' ').title())
+                if st.button(f"🗺️ Generate GeoJSON untuk {display_name}", key=f"btn_{scenario_name}"):
+                    with st.spinner("⏳ Menghasilkan GeoJSON..."):
                         # Create GeoDataFrame dengan sampling
                         geometries = []
                         properties = []
@@ -1213,6 +1228,7 @@ with tab5:
                         y_coords = grid_info['y_coords']
                         
                         pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
+                        conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
                         
                         # Sampling untuk GeoJSON
                         sample_step = max(1, len(y_coords) * len(x_coords) // 1000)
@@ -1230,7 +1246,8 @@ with tab5:
                                     geometries.append(geom)
                                     properties.append({
                                         'gridcode': int(pred_reshaped[i, j]),
-                                        'land_cover': land_cover_classes.get(int(pred_reshaped[i, j]), {}).get('name', 'Unknown')
+                                        'land_cover': land_cover_classes.get(int(pred_reshaped[i, j]), {}).get('name', 'Unknown'),
+                                        'confidence': float(conf_reshaped[i, j])
                                     })
                                 point_count += 1
                         
@@ -1239,48 +1256,86 @@ with tab5:
                             
                             geojson_str = pred_gdf.to_json()
                             st.download_button(
-                                label=f"📥 Download {scenario_name.replace('_', ' ').title()} (GeoJSON)",
+                                label=f"📥 Unduh {display_name} (GeoJSON)",
                                 data=geojson_str,
                                 file_name=f"{scenario_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson",
                                 mime="application/json",
-                                key=f"geojson_{scenario_name}"
+                                key=f"geojson_{scenario_name}",
+                                use_container_width=True
                             )
         
         with col2:
-            st.markdown("### 📊 Visualization Gallery")
+            st.markdown("### 📊 Galeri Visualisasi")
             
             # Simplified comparison plots
             if len(predictions) > 1:
-                scenario_names = list(predictions.keys())[:2]
+                # Pisahkan berdasarkan kebijakan
+                without_policy_data = {k: v for k, v in predictions.items() if 'tanpa_kebijakan' in k}
+                with_policy_data = {k: v for k, v in predictions.items() if 'dengan_kebijakan' in k}
                 
-                if len(scenario_names) >= 2:
+                if without_policy_data and with_policy_data:
                     fig = make_subplots(
                         rows=1, cols=2,
-                        subplot_titles=[s.replace('_', ' ').title() for s in scenario_names],
+                        subplot_titles=['Tanpa Kebijakan', 'Dengan Kebijakan'],
                         specs=[[{'type': 'pie'}, {'type': 'pie'}]]
                     )
                     
-                    for i, scenario_name in enumerate(scenario_names):
-                        pred_data = predictions[scenario_name]
-                        unique, counts = np.unique(pred_data['predictions'], return_counts=True)
-                        
-                        fig.add_trace(
-                            go.Pie(labels=[land_cover_classes.get(u, {}).get('name', f'Class {u}') 
-                                           for u in unique],
-                                  values=counts),
-                            row=1, col=i+1
-                        )
+                    # Rata-rata prediksi tanpa kebijakan
+                    all_preds_no_policy = np.mean([v['predictions'] for v in without_policy_data.values()], axis=0)
+                    unique_no, counts_no = np.unique(all_preds_no_policy, return_counts=True)
                     
-                    fig.update_layout(title_text="Scenario Comparison",
+                    fig.add_trace(
+                        go.Pie(labels=[land_cover_classes.get(u, {}).get('name', f'Kelas {u}') 
+                                       for u in unique_no],
+                              values=counts_no,
+                              marker=dict(colors=[land_cover_classes.get(u, {}).get('color', '#cccccc') 
+                                                 for u in unique_no])),
+                        row=1, col=1
+                    )
+                    
+                    # Rata-rata prediksi dengan kebijakan
+                    all_preds_with_policy = np.mean([v['predictions'] for v in with_policy_data.values()], axis=0)
+                    unique_with, counts_with = np.unique(all_preds_with_policy, return_counts=True)
+                    
+                    fig.add_trace(
+                        go.Pie(labels=[land_cover_classes.get(u, {}).get('name', f'Kelas {u}') 
+                                       for u in unique_with],
+                              values=counts_with,
+                              marker=dict(colors=[land_cover_classes.get(u, {}).get('color', '#cccccc') 
+                                                 for u in unique_with])),
+                        row=1, col=2
+                    )
+                    
+                    fig.update_layout(title_text="Perbandingan Skenario - Rata-rata Prediksi",
                                      showlegend=True,
                                      height=400)
                     st.plotly_chart(fig, use_container_width=True)
+                
+                # Confidence heatmap
+                st.markdown("### 🔥 Peta Panas Kepercayaan Prediksi")
+                
+                # Rata-rata kepercayaan
+                avg_confidence = np.mean([v['confidences'] for v in predictions.values()], axis=0)
+                conf_reshaped = avg_confidence.reshape(len(grid_info['y_coords']), 
+                                                       len(grid_info['x_coords']))
+                
+                fig, ax = plt.subplots(figsize=(10, 6))
+                im = ax.imshow(conf_reshaped, cmap='RdYlGn', 
+                              extent=[grid_info['x_coords'][0], grid_info['x_coords'][-1],
+                                     grid_info['y_coords'][0], grid_info['y_coords'][-1]],
+                              origin='lower', aspect='auto', vmin=0, vmax=1)
+                plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
+                ax.set_title('Rata-rata Kepercayaan Prediksi')
+                ax.set_xlabel('Bujur')
+                ax.set_ylabel('Lintang')
+                st.pyplot(fig)
 
-# Footer
+# Footer - INDONESIA
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 20px;'>
-    <p>🌍 Advanced Land Cover Change Analysis & Prediction System | Developed with Streamlit</p>
-    <p>Using 12 ML Models with 2 Policy Scenarios</p>
+<div style='text-align: center; color: #666; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
+    <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan dengan Streamlit</p>
+    <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan</p>
+    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2024 - Kementerian Lingkungan Hidup dan Kehutanan</p>
 </div>
 """, unsafe_allow_html=True)
