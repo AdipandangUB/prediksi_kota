@@ -1,0 +1,37 @@
+# Core data science libraries
+streamlit>=1.28.0          # Web app framework
+pandas>=2.0.0              # Data manipulation
+numpy>=1.24.0              # Numerical computing
+geopandas>=0.14.0          # Geospatial data handling
+shapely>=2.0.0             # Geometric operations
+
+# Visualization libraries
+matplotlib>=3.7.0          # Basic plotting
+seaborn>=0.12.0            # Statistical visualizations
+plotly>=5.15.0             # Interactive plots
+folium>=0.14.0             # Interactive maps
+streamlit-folium>=0.15.0   # Folium integration for streamlit
+
+# Machine learning
+scikit-learn>=1.3.0        # ML algorithms
+scipy>=1.11.0              # Scientific computing
+
+# Deep learning
+tensorflow>=2.13.0         # Deep learning framework
+keras>=2.13.0              # High-level neural networks API
+
+# Fuzzy logic
+scikit-fuzzy>=0.4.2        # Fuzzy logic systems
+
+# Geospatial processing
+rasterio>=1.3.0            # Raster data handling
+Fiona>=1.9.0               # Vector data handling
+pyproj>=3.6.0              # Coordinate transformations
+
+# Utilities
+joblib>=1.3.0              # Model serialization
+python-dateutil>=2.8.0     # Date handling
+pytz>=2023.0               # Timezone handling
+pathlib>=1.0.0             # Path operations
+pillow>=10.0.0             # Image processing
+tqdm>=4.65.0               # Progress bars
