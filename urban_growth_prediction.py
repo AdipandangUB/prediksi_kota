@@ -37,6 +37,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import seaborn as sns
+import branca.colormap as cm
 
 warnings.filterwarnings('ignore')
 
@@ -78,6 +79,13 @@ st.markdown("""
     .indonesian-header {
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
+    .legend-item {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        margin-right: 5px;
+        border-radius: 3px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -92,6 +100,8 @@ if 'grid_cache' not in st.session_state:
     st.session_state.grid_cache = {}
 if 'feature_dim' not in st.session_state:
     st.session_state.feature_dim = N_TEMPORAL_FEATURES
+if 'reclassified_gdfs' not in st.session_state:
+    st.session_state.reclassified_gdfs = {}
 
 # Title with animation - INDONESIA
 st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
@@ -113,7 +123,7 @@ with st.sidebar:
         "Neural Networks (Jaringan Saraf)": ['ANN', 'MLP'],
         "Tree-based (Berbasis Pohon)": ['DT', 'RF', 'GBM'],
         "Statistical (Statistik)": ['LR', 'NB'],
-        "Instantce-based (Berbasis Sampling)": ['KNN', 'SVM'],
+        "Instance-based (Berbasis Sampling)": ['KNN', 'SVM'],
         "Advanced (Lanjutan)": ['MC', 'FL', 'EA']
     }
     
@@ -139,6 +149,19 @@ with st.sidebar:
                 if st.checkbox(f"{model} - {model_descriptions[model][:50]}...", 
                               value=True, key=f"model_{model}"):
                     selected_models.append(model)
+    
+    st.markdown("---")
+    
+    # Basemap selection
+    st.subheader("🗺️ Pilih Basemap")
+    basemap_options = {
+        "OpenStreetMap": "OpenStreetMap",
+        "Satellite": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "Terrain": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "Dark Matter": "CartoDB dark_matter",
+        "Positron": "CartoDB positron"
+    }
+    selected_basemap = st.selectbox("Pilih jenis peta dasar", list(basemap_options.keys()))
     
     st.markdown("---")
     
@@ -175,12 +198,30 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Laporan & Ekspor"
 ])
 
-# Define land cover classes based on the data - INDONESIA
-land_cover_classes = {
+# ========== KLASIFIKASI TUTUPAN LAHAN BARU ==========
+# Kelas baru: 1: Badan Air, 2: Lahan Terbuka (gabungan vegetasi jarang dan padat), 3: Bangunan
+land_cover_classes_new = {
     1: {"name": "Badan Air", "color": "#3498db", "type": "water", "description": "Sungai, danau, waduk"},
-    2: {"name": "Vegetasi Rapat", "color": "#27ae60", "type": "vegetation", "description": "Hutan, perkebunan lebat"},
-    3: {"name": "Vegetasi Jarang", "color": "#f1c40f", "type": "vegetation", "description": "Semak, lahan terbuka"}
+    2: {"name": "Lahan Terbuka", "color": "#f1c40f", "type": "open_land", "description": "Vegetasi jarang, vegetasi padat, semak, lahan kosong"},
+    3: {"name": "Bangunan", "color": "#e74c3c", "type": "built_up", "description": "Permukiman, industri, infrastruktur"}
 }
+
+# Fungsi untuk reklasifikasi dari gridcode asli ke kelas baru
+def reclassify_land_cover(gridcode):
+    """
+    Reklasifikasi tutupan lahan:
+    - gridcode 1 (Badan Air) -> kelas 1 (Badan Air)
+    - gridcode 2 (Vegetasi Rapat) dan 3 (Vegetasi Jarang) -> kelas 2 (Lahan Terbuka)
+    - Untuk bangunan, jika ada gridcode 4, akan masuk kelas 3 (Bangunan)
+    """
+    if gridcode == 1:
+        return 1  # Badan Air
+    elif gridcode in [2, 3]:
+        return 2  # Lahan Terbuka
+    elif gridcode == 4:
+        return 3  # Bangunan
+    else:
+        return 2  # Default ke Lahan Terbuka jika tidak dikenal
 
 class LandCoverAnalyzer:
     """Main class for land cover analysis and prediction"""
@@ -197,6 +238,7 @@ class LandCoverAnalyzer:
         self.water_bodies = None
         self.feature_cache = {}
         self.feature_dim = N_TEMPORAL_FEATURES  # Default feature dimension
+        self.reclassified_gdfs = {}  # Untuk menyimpan GDF yang sudah direklasifikasi
         
     def load_geojson(self, file, year):
         """Load and validate GeoJSON file"""
@@ -217,10 +259,27 @@ class LandCoverAnalyzer:
             if gdf.crs is None:
                 gdf.set_crs(epsg=4326, inplace=True)
             
+            # Create reclassified version
+            gdf_reclass = gdf.copy()
+            gdf_reclass['gridcode_original'] = gdf_reclass['gridcode']
+            gdf_reclass['gridcode'] = gdf_reclass['gridcode_original'].apply(reclassify_land_cover)
+            gdf_reclass['LandCover'] = gdf_reclass['gridcode'].map({
+                1: 'Badan Air',
+                2: 'Lahan Terbuka',
+                3: 'Bangunan'
+            })
+            
+            # Store both versions
+            self.reclassified_gdfs[year] = gdf_reclass
+            
             return gdf
         except Exception as e:
             st.error(f"Error memuat data {year}: {str(e)}")
             return None
+    
+    def get_reclassified_gdf(self, year):
+        """Get reclassified GeoDataFrame for a specific year"""
+        return self.reclassified_gdfs.get(year, None)
     
     def extract_features(self, geometry):
         """Extract comprehensive features from geometry"""
@@ -262,17 +321,21 @@ class LandCoverAnalyzer:
             return np.zeros(N_FEATURES)
     
     def create_temporal_features(self, year1_gdf, year2_gdf):
-        """Create features capturing temporal changes"""
+        """Create features capturing temporal changes using reclassified data"""
         features = []
         labels = []
         
-        # Sampling untuk performa
-        sample_size = min(5000, len(year1_gdf))
-        year1_sample = year1_gdf.sample(n=sample_size, random_state=42) if len(year1_gdf) > sample_size else year1_gdf
+        # Get reclassified GDFs
+        gdf1_reclass = self.reclassified_gdfs.get(year1_gdf.attrs.get('year', 0), year1_gdf)
+        gdf2_reclass = self.reclassified_gdfs.get(year2_gdf.attrs.get('year', 0), year2_gdf)
         
-        # Get water bodies for both years
-        water1 = year1_gdf[year1_gdf['gridcode'] == 1]
-        water2 = year2_gdf[year2_gdf['gridcode'] == 1]
+        # Sampling untuk performa
+        sample_size = min(5000, len(gdf1_reclass))
+        year1_sample = gdf1_reclass.sample(n=sample_size, random_state=42) if len(gdf1_reclass) > sample_size else gdf1_reclass
+        
+        # Get water bodies for both years (menggunakan kelas baru)
+        water1 = gdf1_reclass[gdf1_reclass['gridcode'] == 1]
+        water2 = gdf2_reclass[gdf2_reclass['gridcode'] == 1]
         
         # Union of water bodies
         all_water = list(water1.geometry) + list(water2.geometry)
@@ -285,17 +348,17 @@ class LandCoverAnalyzer:
                 feat_current = self.extract_features(row.geometry)
                 
                 # Find corresponding geometry in year2
-                if not year2_gdf.empty:
-                    distances = year2_gdf.geometry.distance(row.geometry)
+                if not gdf2_reclass.empty:
+                    distances = gdf2_reclass.geometry.distance(row.geometry)
                     nearest_idx = distances.idxmin()
-                    feat_future = self.extract_features(year2_gdf.loc[nearest_idx].geometry)
+                    feat_future = self.extract_features(gdf2_reclass.loc[nearest_idx].geometry)
                     
-                    # Combine features - total 45 features (15 current + 15 future + 15 diff)
+                    # Combine features
                     combined_feat = np.concatenate([feat_current, feat_future, 
                                                    feat_future - feat_current])
                     
                     features.append(combined_feat)
-                    labels.append(row['gridcode'])
+                    labels.append(row['gridcode'])  # Gunakan gridcode yang sudah direklasifikasi
         
         if not features:
             return np.array([]), np.array([])
@@ -303,20 +366,24 @@ class LandCoverAnalyzer:
         return np.array(features), np.array(labels)
     
     def calculate_transition_matrix(self, gdf1, gdf2):
-        """Calculate transition probabilities between land cover classes"""
-        classes = sorted(set(gdf1['gridcode']) | set(gdf2['gridcode']))
+        """Calculate transition probabilities between land cover classes using reclassified data"""
+        # Gunakan reclassified GDFs
+        gdf1_reclass = self.reclassified_gdfs.get(gdf1.attrs.get('year', 0), gdf1)
+        gdf2_reclass = self.reclassified_gdfs.get(gdf2.attrs.get('year', 0), gdf2)
+        
+        classes = sorted(set(gdf1_reclass['gridcode']) | set(gdf2_reclass['gridcode']))
         n_classes = len(classes)
         matrix = np.zeros((n_classes, n_classes))
         
         # Sampling untuk performa
-        sample_size = min(2000, len(gdf1))
-        gdf1_sample = gdf1.sample(n=sample_size, random_state=42) if len(gdf1) > sample_size else gdf1
+        sample_size = min(2000, len(gdf1_reclass))
+        gdf1_sample = gdf1_reclass.sample(n=sample_size, random_state=42) if len(gdf1_reclass) > sample_size else gdf1_reclass
         
         # Spatial join to find transitions
         for idx, row in gdf1_sample.iterrows():
             if row.geometry and not row.geometry.is_empty:
                 # Find intersecting geometries in gdf2
-                intersections = gdf2[gdf2.geometry.intersects(row.geometry.buffer(0.0001))]
+                intersections = gdf2_reclass[gdf2_reclass.geometry.intersects(row.geometry.buffer(0.0001))]
                 if not intersections.empty:
                     current_class = row['gridcode']
                     # Ambil kelas yang paling umum
@@ -484,11 +551,12 @@ class LandCoverAnalyzer:
             area['besar'] = fuzz.trimf(area.universe, [0.5, 1, 1])
             
             land_cover['air'] = fuzz.trimf(land_cover.universe, [1, 1, 2])
-            land_cover['vegetasi'] = fuzz.trimf(land_cover.universe, [2, 3, 3])
+            land_cover['lahan_terbuka'] = fuzz.trimf(land_cover.universe, [1.5, 2, 2.5])
+            land_cover['bangunan'] = fuzz.trimf(land_cover.universe, [2.5, 3, 3])
             
             # Simplified rules
             rules = [
-                ctrl.Rule(x_pos['rendah'] & y_pos['rendah'] & area['kecil'], land_cover['vegetasi']),
+                ctrl.Rule(x_pos['rendah'] & y_pos['rendah'] & area['kecil'], land_cover['lahan_terbuka']),
                 ctrl.Rule(x_pos['tinggi'] & y_pos['tinggi'] & area['besar'], land_cover['air']),
             ]
             
@@ -532,7 +600,7 @@ class LandCoverAnalyzer:
                 is_water = with_policy and self.is_water_body(point)
                 
                 if is_water:
-                    pred_class = 1
+                    pred_class = 1  # Badan Air
                     confidence = 1.0
                 else:
                     if model_name == 'MC' and transition_matrix is not None:
@@ -545,7 +613,7 @@ class LandCoverAnalyzer:
                     elif model_name == 'FL' and model is not None:
                         try:
                             # Simple fuzzy logic prediction
-                            pred_class = 2
+                            pred_class = 2  # Lahan Terbuka
                             confidence = 0.6
                         except:
                             pred_class = 2
@@ -590,6 +658,80 @@ class LandCoverAnalyzer:
         
         return predictions, confidences
 
+
+# Fungsi untuk membuat peta folium dengan basemap
+def create_folium_map(gdf, year, basemap_type="OpenStreetMap", center=None):
+    """Create Folium map with basemap for GeoJSON visualization"""
+    if gdf is None or len(gdf) == 0:
+        return None
+    
+    # Calculate center if not provided
+    if center is None:
+        bounds = gdf.total_bounds
+        center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
+    
+    # Create base map
+    if basemap_type == "OpenStreetMap":
+        m = folium.Map(location=center, zoom_start=12, tiles='OpenStreetMap')
+    elif basemap_type == "Satellite":
+        m = folium.Map(location=center, zoom_start=12, 
+                      tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                      attr='Esri')
+    elif basemap_type == "Terrain":
+        m = folium.Map(location=center, zoom_start=12, 
+                      tiles='https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+                      attr='OpenTopoMap')
+    elif basemap_type == "Dark Matter":
+        m = folium.Map(location=center, zoom_start=12, tiles='CartoDB dark_matter')
+    elif basemap_type == "Positron":
+        m = folium.Map(location=center, zoom_start=12, tiles='CartoDB positron')
+    else:
+        m = folium.Map(location=center, zoom_start=12)
+    
+    # Create color mapping for new classes
+    def get_color(gridcode):
+        if gridcode == 1:
+            return '#3498db'  # Blue - Water
+        elif gridcode == 2:
+            return '#f1c40f'  # Yellow - Open Land
+        elif gridcode == 3:
+            return '#e74c3c'  # Red - Built-up
+        else:
+            return '#95a5a6'  # Grey - Unknown
+    
+    # Add GeoJSON to map
+    folium.GeoJson(
+        gdf,
+        name=f'Tutupan Lahan {year}',
+        style_function=lambda feature: {
+            'fillColor': get_color(feature['properties']['gridcode']),
+            'color': 'black',
+            'weight': 0.5,
+            'fillOpacity': 0.7
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=['gridcode', 'LandCover'],
+            aliases=['Kode', 'Tutupan Lahan'],
+            localize=True
+        )
+    ).add_to(m)
+    
+    # Add legend
+    legend_html = '''
+    <div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border-radius: 5px; border: 2px solid grey;">
+        <p><strong>Legenda Tutupan Lahan</strong></p>
+        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block;"></span> Badan Air</p>
+        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block;"></span> Lahan Terbuka</p>
+        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block;"></span> Bangunan</p>
+    </div>
+    '''
+    m.get_root().html.add_child(folium.Element(legend_html))
+    
+    # Add layer control
+    folium.LayerControl().add_to(m)
+    
+    return m
+
 # Initialize analyzer
 analyzer = LandCoverAnalyzer()
 
@@ -600,6 +742,7 @@ with tab1:
     <div style='background-color: #fff8e7; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
         <p>📌 Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk menganalisis pola perubahan</p>
         <p>🗂️ Format file: <strong>GeoJSON</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
+        <p>🔄 <strong>Reklasifikasi Otomatis:</strong> Data akan direklasifikasi menjadi 3 kelas: Badan Air (1), Lahan Terbuka (2), Bangunan (3)</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -642,6 +785,7 @@ with tab1:
                 gdf2 = analyzer.load_geojson(file2, year2)
                 
                 if gdf1 is not None and gdf2 is not None:
+                    # Store original GDFs
                     analyzer.gdfs[year1] = gdf1
                     analyzer.gdfs[year2] = gdf2
                     analyzer.years = sorted([year1, year2])
@@ -666,24 +810,56 @@ with tab1:
                     
                     st.success(f"✅ Berhasil memuat {len(analyzer.gdfs)} file dari tahun: {', '.join(map(str, analyzer.years))}")
                     
-                    # Show data summary
-                    st.subheader("📊 Ringkasan Data")
+                    # Show data summary with original and reclassified
+                    st.subheader("📊 Ringkasan Data (Setelah Reklasifikasi)")
+                    
                     summary_data = []
-                    for year, gdf in analyzer.gdfs.items():
-                        summary_data.append({
-                            'Tahun': year,
-                            'Fitur': len(gdf),
-                            'Badan Air': len(gdf[gdf['gridcode'] == 1]),
-                            'Vegetasi Rapat': len(gdf[gdf['gridcode'] == 2]),
-                            'Vegetasi Jarang': len(gdf[gdf['gridcode'] == 3]),
-                            'Luas (derajat²)': f"{gdf.geometry.area.sum():.4f}"
-                        })
+                    for year in analyzer.years:
+                        gdf_reclass = analyzer.get_reclassified_gdf(year)
+                        if gdf_reclass is not None:
+                            counts = gdf_reclass['gridcode'].value_counts()
+                            summary_data.append({
+                                'Tahun': year,
+                                'Badan Air': counts.get(1, 0),
+                                'Lahan Terbuka': counts.get(2, 0),
+                                'Bangunan': counts.get(3, 0),
+                                'Total': len(gdf_reclass)
+                            })
                     
                     summary_df = pd.DataFrame(summary_data)
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
                     
                     # Store in session state
                     st.session_state.historical_data = analyzer
+                    
+                    # Visualize with basemap
+                    st.subheader("🗺️ Visualisasi Peta dengan Basemap")
+                    
+                    # Create tabs for each year
+                    map_tabs = st.tabs([f"Tahun {year}" for year in analyzer.years])
+                    
+                    for i, year in enumerate(analyzer.years):
+                        with map_tabs[i]:
+                            gdf_reclass = analyzer.get_reclassified_gdf(year)
+                            if gdf_reclass is not None:
+                                # Calculate center
+                                bounds = gdf_reclass.total_bounds
+                                center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
+                                
+                                # Create map
+                                m = create_folium_map(gdf_reclass, year, selected_basemap, center)
+                                if m is not None:
+                                    folium_static(m, width=800, height=500)
+                                
+                                # Show statistics
+                                col1, col2, col3 = st.columns(3)
+                                counts = gdf_reclass['gridcode'].value_counts()
+                                with col1:
+                                    st.metric("Badan Air", counts.get(1, 0))
+                                with col2:
+                                    st.metric("Lahan Terbuka", counts.get(2, 0))
+                                with col3:
+                                    st.metric("Bangunan", counts.get(3, 0))
 
 # ========== TAB 2: ANALISIS HISTORIS ==========
 with tab2:
@@ -694,7 +870,7 @@ with tab2:
     else:
         analyzer = st.session_state.historical_data
         
-        # Calculate change rates between consecutive years
+        # Calculate change rates between consecutive years using reclassified data
         change_data = []
         transition_matrices = []
         
@@ -704,7 +880,11 @@ with tab2:
             gdf1 = analyzer.gdfs[year1]
             gdf2 = analyzer.gdfs[year2]
             
-            # Calculate transition matrix
+            # Set year attribute for reclassification lookup
+            gdf1.attrs['year'] = year1
+            gdf2.attrs['year'] = year2
+            
+            # Calculate transition matrix with reclassified data
             matrix, classes = analyzer.calculate_transition_matrix(gdf1, gdf2)
             transition_matrices.append({
                 'years': f"{year1}-{year2}",
@@ -712,87 +892,99 @@ with tab2:
                 'classes': classes
             })
             
-            # Calculate change statistics
-            changes = {
-                'Periode': f"{year1}-{year2}",
-                'Tahun': year2 - year1,
-                'Perubahan Air': len(gdf2[gdf2['gridcode'] == 1]) - len(gdf1[gdf1['gridcode'] == 1]),
-                'Perubahan Veg. Rapat': len(gdf2[gdf2['gridcode'] == 2]) - len(gdf1[gdf1['gridcode'] == 2]),
-                'Perubahan Veg. Jarang': len(gdf2[gdf2['gridcode'] == 3]) - len(gdf1[gdf1['gridcode'] == 3]),
-            }
-            change_data.append(changes)
-        
-        change_df = pd.DataFrame(change_data)
-        
-        # Display change analysis
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📈 Statistik Perubahan")
-            st.dataframe(change_df, use_container_width=True, hide_index=True)
+            # Get reclassified GDFs for statistics
+            gdf1_reclass = analyzer.get_reclassified_gdf(year1)
+            gdf2_reclass = analyzer.get_reclassified_gdf(year2)
             
-            # Calculate annual change rates
-            st.subheader("📉 Laju Perubahan Tahunan")
-            annual_rates = change_df.copy()
-            for col in ['Perubahan Air', 'Perubahan Veg. Rapat', 'Perubahan Veg. Jarang']:
-                annual_rates[f'Laju {col}'] = (annual_rates[col] / annual_rates['Tahun']).round(2)
+            if gdf1_reclass is not None and gdf2_reclass is not None:
+                # Calculate change statistics with new classes
+                changes = {
+                    'Periode': f"{year1}-{year2}",
+                    'Tahun': year2 - year1,
+                    'Perubahan Air': len(gdf2_reclass[gdf2_reclass['gridcode'] == 1]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 1]),
+                    'Perubahan Lahan Terbuka': len(gdf2_reclass[gdf2_reclass['gridcode'] == 2]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 2]),
+                    'Perubahan Bangunan': len(gdf2_reclass[gdf2_reclass['gridcode'] == 3]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 3]),
+                }
+                change_data.append(changes)
+        
+        if change_data:
+            change_df = pd.DataFrame(change_data)
             
-            st.dataframe(annual_rates[['Periode', 'Laju Perubahan Air', 'Laju Perubahan Veg. Rapat', 
-                                      'Laju Perubahan Veg. Jarang']], use_container_width=True, hide_index=True)
-        
-        with col2:
-            st.subheader("🔄 Matriks Transisi")
-            for tm in transition_matrices:
-                with st.expander(f"Matriks Transisi {tm['years']}"):
-                    fig, ax = plt.subplots(figsize=(8, 6))
-                    sns.heatmap(tm['matrix'], annot=True, fmt='.2f', cmap='YlOrRd',
-                               xticklabels=tm['classes'], yticklabels=tm['classes'],
-                               ax=ax)
-                    ax.set_xlabel('Ke Kelas')
-                    ax.set_ylabel('Dari Kelas')
-                    ax.set_title(f'Probabilitas Transisi {tm["years"]}')
-                    st.pyplot(fig)
-        
-        # Visualization of changes over time
-        st.subheader("📊 Evolusi Tutupan Lahan")
-        
-        # Prepare data for plotting
-        plot_data = []
-        for year, gdf in analyzer.gdfs.items():
-            counts = gdf['gridcode'].value_counts()
-            plot_data.append({
-                'Tahun': year,
-                'Air': counts.get(1, 0),
-                'Vegetasi Rapat': counts.get(2, 0),
-                'Vegetasi Jarang': counts.get(3, 0)
-            })
-        
-        plot_df = pd.DataFrame(plot_data)
-        
-        # Create interactive plot
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Air'],
-                                 mode='lines+markers', name='Air',
-                                 line=dict(color='#3498db', width=3)))
-        fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Rapat'],
-                                 mode='lines+markers', name='Vegetasi Rapat',
-                                 line=dict(color='#27ae60', width=3)))
-        fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Jarang'],
-                                 mode='lines+markers', name='Vegetasi Jarang',
-                                 line=dict(color='#f1c40f', width=3)))
-        
-        fig.update_layout(
-            title='Evolusi Tutupan Lahan dari Waktu ke Waktu',
-            xaxis_title='Tahun',
-            yaxis_title='Jumlah Fitur',
-            hovermode='x unified',
-            template='plotly_white'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Store transition matrices for later use
-        analyzer.transition_matrices = transition_matrices
+            # Display change analysis
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("📈 Statistik Perubahan")
+                st.dataframe(change_df, use_container_width=True, hide_index=True)
+                
+                # Calculate annual change rates
+                st.subheader("📉 Laju Perubahan Tahunan")
+                annual_rates = change_df.copy()
+                for col in ['Perubahan Air', 'Perubahan Lahan Terbuka', 'Perubahan Bangunan']:
+                    annual_rates[f'Laju {col}'] = (annual_rates[col] / annual_rates['Tahun']).round(2)
+                
+                st.dataframe(annual_rates[['Periode', 'Laju Perubahan Air', 'Laju Perubahan Lahan Terbuka', 
+                                          'Laju Perubahan Bangunan']], use_container_width=True, hide_index=True)
+            
+            with col2:
+                st.subheader("🔄 Matriks Transisi")
+                for tm in transition_matrices:
+                    with st.expander(f"Matriks Transisi {tm['years']}"):
+                        # Create class names for new classification
+                        class_names = {1: 'Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}
+                        xticklabels = [class_names.get(c, f'Kelas {c}') for c in tm['classes']]
+                        
+                        fig, ax = plt.subplots(figsize=(8, 6))
+                        sns.heatmap(tm['matrix'], annot=True, fmt='.2f', cmap='YlOrRd',
+                                   xticklabels=xticklabels, yticklabels=xticklabels,
+                                   ax=ax)
+                        ax.set_xlabel('Ke Kelas')
+                        ax.set_ylabel('Dari Kelas')
+                        ax.set_title(f'Probabilitas Transisi {tm["years"]}')
+                        st.pyplot(fig)
+            
+            # Visualization of changes over time
+            st.subheader("📊 Evolusi Tutupan Lahan")
+            
+            # Prepare data for plotting
+            plot_data = []
+            for year in analyzer.years:
+                gdf_reclass = analyzer.get_reclassified_gdf(year)
+                if gdf_reclass is not None:
+                    counts = gdf_reclass['gridcode'].value_counts()
+                    plot_data.append({
+                        'Tahun': year,
+                        'Air': counts.get(1, 0),
+                        'Lahan Terbuka': counts.get(2, 0),
+                        'Bangunan': counts.get(3, 0)
+                    })
+            
+            plot_df = pd.DataFrame(plot_data)
+            
+            # Create interactive plot
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Air'],
+                                     mode='lines+markers', name='Air',
+                                     line=dict(color='#3498db', width=3)))
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Lahan Terbuka'],
+                                     mode='lines+markers', name='Lahan Terbuka',
+                                     line=dict(color='#f1c40f', width=3)))
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Bangunan'],
+                                     mode='lines+markers', name='Bangunan',
+                                     line=dict(color='#e74c3c', width=3)))
+            
+            fig.update_layout(
+                title='Evolusi Tutupan Lahan dari Waktu ke Waktu',
+                xaxis_title='Tahun',
+                yaxis_title='Jumlah Fitur',
+                hovermode='x unified',
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Store transition matrices for later use
+            analyzer.transition_matrices = transition_matrices
 
 # ========== TAB 3: PELATIHAN MODEL ==========
 with tab3:
@@ -827,9 +1019,14 @@ with tab3:
                         status_text.text(f"📊 Mengekstrak fitur dari periode {i+1}/{len(analyzer.years)-1}...")
                         year1 = analyzer.years[i]
                         year2 = analyzer.years[i + 1]
-                        X, y = analyzer.create_temporal_features(
-                            analyzer.gdfs[year1], analyzer.gdfs[year2]
-                        )
+                        gdf1 = analyzer.gdfs[year1]
+                        gdf2 = analyzer.gdfs[year2]
+                        
+                        # Set year attribute
+                        gdf1.attrs['year'] = year1
+                        gdf2.attrs['year'] = year2
+                        
+                        X, y = analyzer.create_temporal_features(gdf1, gdf2)
                         if len(X) > 0:
                             all_features.append(X)
                             all_labels.append(y)
@@ -1105,6 +1302,17 @@ with tab4:
                     # Visualization
                     st.subheader("🗺️ Peta Prediksi")
                     
+                    # Create color mapping for predictions
+                    def get_prediction_color(pred_class):
+                        if pred_class == 1:
+                            return '#3498db'  # Blue - Water
+                        elif pred_class == 2:
+                            return '#f1c40f'  # Yellow - Open Land
+                        elif pred_class == 3:
+                            return '#e74c3c'  # Red - Built-up
+                        else:
+                            return '#95a5a6'  # Grey
+                    
                     # Pilih tab untuk visualisasi
                     viz_tabs = st.tabs([data['display_name'] for data in all_predictions.values()][:4])
                     
@@ -1117,11 +1325,21 @@ with tab4:
                             
                             with col1:
                                 fig, ax = plt.subplots(figsize=(8, 6))
-                                im = ax.imshow(pred_reshaped, cmap='RdYlGn',
+                                
+                                # Create custom colormap
+                                from matplotlib.colors import ListedColormap
+                                colors = ['#3498db', '#f1c40f', '#e74c3c']
+                                cmap = ListedColormap(colors)
+                                
+                                im = ax.imshow(pred_reshaped, cmap=cmap,
                                               extent=[x_coords[0], x_coords[-1],
                                                       y_coords[0], y_coords[-1]],
-                                              origin='lower', aspect='auto')
-                                plt.colorbar(im, ax=ax, label='Kelas Tutupan Lahan')
+                                              origin='lower', aspect='auto', vmin=1, vmax=3)
+                                
+                                # Create colorbar with labels
+                                cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3])
+                                cbar.ax.set_yticklabels(['Badan Air', 'Lahan Terbuka', 'Bangunan'])
+                                
                                 ax.set_title('Prediksi Tutupan Lahan')
                                 ax.set_xlabel('Bujur')
                                 ax.set_ylabel('Lintang')
@@ -1154,7 +1372,8 @@ with tab4:
                         }
                         
                         for u, c, p in zip(unique, counts, percentages):
-                            stats[land_cover_classes.get(u, {}).get('name', f'Kelas {u}')] = f"{c} ({p:.1f}%)"
+                            class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}')
+                            stats[class_name] = f"{c} ({p:.1f}%)"
                         
                         stats_data.append(stats)
                     
@@ -1193,9 +1412,10 @@ with tab5:
                 percentages = counts / len(pred_data['predictions']) * 100
                 
                 for u, c, p in zip(unique, counts, percentages):
+                    class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}')
                     report_data.append({
                         'Skenario': pred_data.get('display_name', scenario_name.replace('_', ' ').title()),
-                        'Tutupan Lahan': land_cover_classes.get(u, {}).get('name', f'Kelas {u}'),
+                        'Tutupan Lahan': class_name,
                         'Jumlah': c,
                         'Persentase': f"{p:.2f}%",
                         'Rata-rata Kepercayaan': f"{np.mean(pred_data['confidences']):.3f}"
@@ -1243,10 +1463,13 @@ with tab5:
                                     geom = box(x - cell_size_x/2, y - cell_size_y/2,
                                               x + cell_size_x/2, y + cell_size_y/2)
                                     
+                                    pred_class = int(pred_reshaped[i, j])
+                                    class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
+                                    
                                     geometries.append(geom)
                                     properties.append({
-                                        'gridcode': int(pred_reshaped[i, j]),
-                                        'land_cover': land_cover_classes.get(int(pred_reshaped[i, j]), {}).get('name', 'Unknown'),
+                                        'gridcode': pred_class,
+                                        'land_cover': class_name,
                                         'confidence': float(conf_reshaped[i, j])
                                     })
                                 point_count += 1
@@ -1284,12 +1507,13 @@ with tab5:
                     all_preds_no_policy = np.mean([v['predictions'] for v in without_policy_data.values()], axis=0)
                     unique_no, counts_no = np.unique(all_preds_no_policy, return_counts=True)
                     
+                    labels_no = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_no]
+                    colors_no = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_no]
+                    
                     fig.add_trace(
-                        go.Pie(labels=[land_cover_classes.get(u, {}).get('name', f'Kelas {u}') 
-                                       for u in unique_no],
+                        go.Pie(labels=labels_no,
                               values=counts_no,
-                              marker=dict(colors=[land_cover_classes.get(u, {}).get('color', '#cccccc') 
-                                                 for u in unique_no])),
+                              marker=dict(colors=colors_no)),
                         row=1, col=1
                     )
                     
@@ -1297,12 +1521,13 @@ with tab5:
                     all_preds_with_policy = np.mean([v['predictions'] for v in with_policy_data.values()], axis=0)
                     unique_with, counts_with = np.unique(all_preds_with_policy, return_counts=True)
                     
+                    labels_with = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_with]
+                    colors_with = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_with]
+                    
                     fig.add_trace(
-                        go.Pie(labels=[land_cover_classes.get(u, {}).get('name', f'Kelas {u}') 
-                                       for u in unique_with],
+                        go.Pie(labels=labels_with,
                               values=counts_with,
-                              marker=dict(colors=[land_cover_classes.get(u, {}).get('color', '#cccccc') 
-                                                 for u in unique_with])),
+                              marker=dict(colors=colors_with)),
                         row=1, col=2
                     )
                     
@@ -1336,6 +1561,6 @@ st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
     <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan oleh Dr. Adipandang Yudono (Scrypt, Sistem Arsitektur, WebGIS Analytics)</p>
     <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan</p>
-    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Catatan GIS Programmer Pinggir Kali </p>
+    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Catatan GIS Programmer Pinggir Kali</p>
 </div>
 """, unsafe_allow_html=True)
