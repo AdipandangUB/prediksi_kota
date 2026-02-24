@@ -22,6 +22,7 @@ keras>=2.13.0              # High-level neural networks API
 
 # Fuzzy logic
 scikit-fuzzy>=0.4.2        # Fuzzy logic systems
+networkx==3.1
 
 # Geospatial processing
 rasterio>=1.3.0            # Raster data handling
