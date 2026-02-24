@@ -38,12 +38,21 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import seaborn as sns
 import branca.colormap as cm
+import requests
+import io
+import zipfile
 
 warnings.filterwarnings('ignore')
 
 # Constants
 N_FEATURES = 15  # Jumlah fitur dasar
 N_TEMPORAL_FEATURES = N_FEATURES * 3  # current + future + diff = 45
+
+# Google Drive file IDs for sample data
+SAMPLE_DATA = {
+    "Land_Cover_Kota_Makassar_Tahun_2009.geojson": "1gQqY1RqY1RqY1RqY1RqY1RqY1RqY1RqY1Rq",  # Ganti dengan file ID yang benar
+    "Land_Cover_Kota_Makassar_Tahun_2015.geojson": "1hQqY1RqY1RqY1RqY1RqY1RqY1RqY1RqY1Rq"   # Ganti dengan file ID yang benar
+}
 
 # Set page config
 st.set_page_config(
@@ -86,6 +95,21 @@ st.markdown("""
         margin-right: 5px;
         border-radius: 3px;
     }
+    .sample-data-card {
+        background-color: #f0f8ff;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #4CAF50;
+        margin: 10px 0;
+    }
+    .download-link {
+        color: #4CAF50;
+        text-decoration: none;
+        font-weight: bold;
+    }
+    .download-link:hover {
+        text-decoration: underline;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -108,6 +132,8 @@ if 'current_grid_info' not in st.session_state:
     st.session_state.current_grid_info = None
 if 'selected_prediction_year' not in st.session_state:
     st.session_state.selected_prediction_year = 25
+if 'sample_data_loaded' not in st.session_state:
+    st.session_state.sample_data_loaded = False
 
 # Title with animation - INDONESIA
 st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
@@ -117,6 +143,68 @@ st.markdown("""
     <p style='color: #34495e;'>Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk mendeteksi pola perubahan</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Fungsi untuk mendownload file dari Google Drive
+def download_from_google_drive(file_id, destination):
+    """Download file from Google Drive using file ID"""
+    try:
+        URL = "https://docs.google.com/uc?export=download"
+        
+        session = requests.Session()
+        response = session.get(URL, params={'id': file_id}, stream=True)
+        
+        # Cek apakah ada konfirmasi virus
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                params = {'id': file_id, 'confirm': value}
+                response = session.get(URL, params=params, stream=True)
+        
+        with open(destination, 'wb') as f:
+            for chunk in response.iter_content(32768):
+                if chunk:
+                    f.write(chunk)
+        return True
+    except Exception as e:
+        st.error(f"Error downloading file: {str(e)}")
+        return False
+
+# Fungsi untuk memuat data contoh
+def load_sample_data():
+    """Load sample data from Google Drive"""
+    try:
+        with st.spinner("⏳ Mendownload data contoh Kota Makassar..."):
+            # Buat direktori temporary jika belum ada
+            temp_dir = Path("temp_data")
+            temp_dir.mkdir(exist_ok=True)
+            
+            # File IDs yang benar dari link Google Drive
+            # Catatan: File ID didapat dari URL sharing
+            file_ids = {
+                "Land_Cover_Kota_Makassar_Tahun_2009.geojson": "1abc123def456ghi789",  # Ganti dengan ID sebenarnya
+                "Land_Cover_Kota_Makassar_Tahun_2015.geojson": "1def456ghi789jkl012"   # Ganti dengan ID sebenarnya
+            }
+            
+            downloaded_files = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, (filename, file_id) in enumerate(file_ids.items()):
+                status_text.text(f"Mendownload {filename}...")
+                filepath = temp_dir / filename
+                
+                # Download file
+                if download_from_google_drive(file_id, filepath):
+                    downloaded_files.append(filepath)
+                
+                progress_bar.progress((i + 1) / len(file_ids))
+            
+            status_text.text("✅ Download selesai!")
+            progress_bar.empty()
+            
+            return downloaded_files
+    except Exception as e:
+        st.error(f"Error loading sample data: {str(e)}")
+        return []
 
 # Sidebar for configuration - INDONESIA
 with st.sidebar:
@@ -252,7 +340,11 @@ class LandCoverAnalyzer:
     def load_geojson(self, file, year):
         """Load and validate GeoJSON file"""
         try:
-            gdf = gpd.read_file(file)
+            # Handle both file paths and uploaded files
+            if isinstance(file, (str, Path)):
+                gdf = gpd.read_file(file)
+            else:
+                gdf = gpd.read_file(file)
             
             # Validate required columns
             required_cols = ['gridcode', 'LandCover', 'geometry']
@@ -754,6 +846,45 @@ analyzer = LandCoverAnalyzer()
 # ========== TAB 1: UNGGAH DATA ==========
 with tab1:
     st.header("📤 Unggah Data Historis")
+    
+    # Sample data section
+    st.markdown("""
+    <div class='sample-data-card'>
+        <h4>📁 Data Contoh Kota Makassar</h4>
+        <p>Gunakan data contoh dari Kota Makassar untuk simulasi cepat:</p>
+        <ul>
+            <li><strong>Land_Cover_Kota_Makassar_Tahun_2009.geojson</strong> - Data tutupan lahan tahun 2009</li>
+            <li><strong>Land_Cover_Kota_Makassar_Tahun_2015.geojson</strong> - Data tutupan lahan tahun 2015</li>
+        </ul>
+        <p>🔗 Sumber: <a href='https://drive.google.com/drive/folders/1mPKzyD9-aFrHGcBzH6EVP2FwOQS6xYlv' target='_blank' class='download-link'>Google Drive - Urban Growth Makassar 2009-2015</a></p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📥 Muat Data Contoh Makassar 2009-2015", use_container_width=True):
+            with st.spinner("⏳ Memuat data contoh..."):
+                try:
+                    # Untuk demonstrasi, kita akan menggunakan file yang sudah diupload
+                    # Dalam implementasi sebenarnya, file harus diupload atau didownload dari Google Drive
+                    
+                    # Simulasi loading data
+                    st.info("📌 Catatan: Untuk menggunakan data sesungguhnya, upload file GeoJSON dari folder Google Drive.")
+                    st.markdown("""
+                    **Langkah-langkah menggunakan data contoh:**
+                    1. Download file dari [Google Drive](https://drive.google.com/drive/folders/1mPKzyD9-aFrHGcBzH6EVP2FwOQS6xYlv)
+                    2. Upload file menggunakan form di bawah
+                    3. Proses data dengan klik tombol "Proses Data yang Diunggah"
+                    """)
+                    
+                    # Set flag bahwa sample data sudah siap
+                    st.session_state.sample_data_loaded = True
+                    
+                except Exception as e:
+                    st.error(f"Error memuat data contoh: {str(e)}")
+    
+    st.markdown("---")
     st.markdown("""
     <div style='background-color: #fff8e7; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
         <p>📌 Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk menganalisis pola perubahan</p>
@@ -768,13 +899,13 @@ with tab1:
         st.subheader("📁 File 1 (Tahun Terdahulu)")
         file1 = st.file_uploader("Pilih GeoJSON pertama", type=['geojson'], key='file1')
         year1 = st.number_input("Tahun untuk File 1", min_value=1900, max_value=2100, 
-                                value=2015, step=1, key='year1')
+                                value=2009, step=1, key='year1')  # Default ke 2009 untuk contoh
         
     with col2:
         st.subheader("📁 File 2 (Tahun Terbaru)")
         file2 = st.file_uploader("Pilih GeoJSON kedua", type=['geojson'], key='file2')
         year2 = st.number_input("Tahun untuk File 2", min_value=1900, max_value=2100, 
-                                value=2020, step=1, key='year2')
+                                value=2015, step=1, key='year2')  # Default ke 2015 untuk contoh
     
     # Option for additional files
     with st.expander("➕ Tambah file lainnya (opsional)"):
@@ -852,30 +983,31 @@ with tab1:
                     st.subheader("🗺️ Visualisasi Peta dengan Basemap")
                     
                     # Create tabs for each year
-                    map_tabs = st.tabs([f"Tahun {year}" for year in analyzer.years])
-                    
-                    for i, year in enumerate(analyzer.years):
-                        with map_tabs[i]:
-                            gdf_reclass = analyzer.get_reclassified_gdf(year)
-                            if gdf_reclass is not None:
-                                # Calculate center
-                                bounds = gdf_reclass.total_bounds
-                                center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-                                
-                                # Create map
-                                m = create_folium_map(gdf_reclass, f'Tutupan Lahan {year}', selected_basemap, center)
-                                if m is not None:
-                                    folium_static(m, width=800, height=500)
-                                
-                                # Show statistics
-                                col1, col2, col3 = st.columns(3)
-                                counts = gdf_reclass['gridcode'].value_counts()
-                                with col1:
-                                    st.metric("Badan Air", counts.get(1, 0))
-                                with col2:
-                                    st.metric("Lahan Terbuka", counts.get(2, 0))
-                                with col3:
-                                    st.metric("Bangunan", counts.get(3, 0))
+                    if len(analyzer.years) > 0:
+                        map_tabs = st.tabs([f"Tahun {year}" for year in analyzer.years])
+                        
+                        for i, year in enumerate(analyzer.years):
+                            with map_tabs[i]:
+                                gdf_reclass = analyzer.get_reclassified_gdf(year)
+                                if gdf_reclass is not None:
+                                    # Calculate center
+                                    bounds = gdf_reclass.total_bounds
+                                    center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
+                                    
+                                    # Create map
+                                    m = create_folium_map(gdf_reclass, f'Tutupan Lahan {year}', selected_basemap, center)
+                                    if m is not None:
+                                        folium_static(m, width=800, height=500)
+                                    
+                                    # Show statistics
+                                    col1, col2, col3 = st.columns(3)
+                                    counts = gdf_reclass['gridcode'].value_counts()
+                                    with col1:
+                                        st.metric("Badan Air", counts.get(1, 0))
+                                    with col2:
+                                        st.metric("Lahan Terbuka", counts.get(2, 0))
+                                    with col3:
+                                        st.metric("Bangunan", counts.get(3, 0))
 
 # ========== TAB 2: ANALISIS HISTORIS ==========
 with tab2:
@@ -1220,7 +1352,7 @@ with tab3:
                         else:
                             st.info("ℹ️ Tidak ada data kepentingan fitur untuk model yang dilatih")
 
-# ========== TAB 4: PREDIKSI MASA DEPAN (FIXED VERSION) ==========
+# ========== TAB 4: PREDIKSI MASA DEPAN ==========
 with tab4:
     st.header("🔮 Prediksi Tutupan Lahan Masa Depan")
     
@@ -1364,7 +1496,7 @@ with tab4:
                     scenario_options = list(all_predictions.keys())
                     
                     if scenario_options:
-                        # Create a unique key for the selector that includes the list of options
+                        # Create a unique key for the selector
                         selector_key = f"map_selector_{hash(frozenset(scenario_options))}"
                         
                         selected_scenario = st.selectbox(
@@ -1452,7 +1584,7 @@ with tab4:
                 # Buat tabs untuk setiap skenario
                 scenario_items = list(all_predictions.items())
                 if scenario_items:
-                    # Limit to first 4 scenarios to avoid too many tabs
+                    # Limit to first 4 scenarios
                     display_items = scenario_items[:4]
                     viz_tabs = st.tabs([data['display_name'] for _, data in display_items])
                     
@@ -1723,6 +1855,6 @@ st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
     <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan oleh Dr. Adipandang Yudono (Scrypt, Sistem Arsitektur, WebGIS Analytics)</p>
     <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan</p>
-    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Catatan GIS Programmer Pinggir Kali</p>
+    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Departemen Perencanan Wilayah & Kota, Fakultas Teknik, UNIVERSITAS BRAWIJAYA</p>
 </div>
 """, unsafe_allow_html=True)
