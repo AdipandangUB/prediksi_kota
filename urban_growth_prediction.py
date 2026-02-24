@@ -1334,8 +1334,8 @@ with tab5:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
-    <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan dengan Streamlit</p>
+    <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan oleh Dr. Adipandang Yudono (Scrypt, Sistem Arsitektur, WebGIS Analytics)</p>
     <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan</p>
-    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2024 - Kementerian Lingkungan Hidup dan Kehutanan</p>
+    <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Adipandang Yudono </p>
 </div>
 """, unsafe_allow_html=True)
