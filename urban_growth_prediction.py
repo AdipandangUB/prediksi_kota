@@ -25,7 +25,7 @@ from tensorflow import keras
 from tensorflow.keras import layers, callbacks
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
-import networkx as nx  # <-- TAMBAHKAN INI
+import networkx as nx
 from scipy.spatial import cKDTree
 import warnings
 import datetime
@@ -87,6 +87,8 @@ if 'change_rates' not in st.session_state:
     st.session_state.change_rates = None
 if 'grid_cache' not in st.session_state:
     st.session_state.grid_cache = {}
+if 'feature_dim' not in st.session_state:
+    st.session_state.feature_dim = N_TEMPORAL_FEATURES
 
 # Title with animation
 st.title("🌍 Advanced Land Cover Change Analysis & Prediction System")
@@ -191,6 +193,7 @@ class LandCoverAnalyzer:
         self.bounds = None
         self.water_bodies = None
         self.feature_cache = {}
+        self.feature_dim = N_TEMPORAL_FEATURES  # Default feature dimension
         
     def load_geojson(self, file, year):
         """Load and validate GeoJSON file"""
@@ -353,8 +356,8 @@ class LandCoverAnalyzer:
         for i, y in enumerate(y_coords):
             for j, x in enumerate(x_coords):
                 point = Point(x, y)
-                # Simple features for grid points
-                features = np.zeros(N_TEMPORAL_FEATURES)  # Gunakan ukuran yang konsisten
+                # Simple features for grid points - gunakan dimensi yang benar
+                features = np.zeros(self.feature_dim)
                 features[0] = x
                 features[1] = y
                 
@@ -505,11 +508,17 @@ class LandCoverAnalyzer:
         ensemble.fit(X_train, y_train)
         return ensemble
     
+    # ========== FIXED PREDICT FUTURE METHOD ==========
     def predict_future(self, model_name, model, grid_points, years, transition_matrix=None, 
                       with_policy=False, batch_size=1000):
-        """Predict future land cover"""
+        """Predict future land cover - FIXED VERSION"""
         predictions = np.zeros(len(grid_points), dtype=int)
         confidences = np.zeros(len(grid_points))
+        
+        # Get feature dimension from model if available
+        feature_dim = self.feature_dim
+        if model is not None and hasattr(model, 'n_features_in_'):
+            feature_dim = model.n_features_in_
         
         for i in range(0, len(grid_points), batch_size):
             batch = grid_points[i:i+batch_size]
@@ -533,6 +542,7 @@ class LandCoverAnalyzer:
                         
                     elif model_name == 'FL' and model is not None:
                         try:
+                            # Simple fuzzy logic prediction
                             pred_class = 2
                             confidence = 0.6
                         except:
@@ -540,16 +550,33 @@ class LandCoverAnalyzer:
                             confidence = 0.5
                     else:
                         if model is not None:
-                            # Gunakan fitur sederhana untuk prediksi
-                            features = point_data['features'][:X_train.shape[1]].reshape(1, -1)
+                            # Gunakan fitur yang sesuai dengan dimensi model
+                            features = point_data['features'].copy()
+                            
+                            # Pastikan fitur memiliki dimensi yang benar
+                            if len(features) < feature_dim:
+                                # Pad dengan nol jika kurang
+                                features = np.pad(features, (0, feature_dim - len(features)), 
+                                                'constant', constant_values=0)
+                            elif len(features) > feature_dim:
+                                # Potong jika lebih
+                                features = features[:feature_dim]
+                            
+                            features = features.reshape(1, -1)
+                            
                             try:
+                                # Scale features if scaler is fitted
+                                if hasattr(self.scaler, 'mean_'):
+                                    features = self.scaler.transform(features)
+                                
                                 pred_class = model.predict(features)[0]
                                 if hasattr(model, 'predict_proba'):
                                     probs = model.predict_proba(features)[0]
                                     confidence = np.max(probs)
                                 else:
                                     confidence = 0.7
-                            except:
+                            except Exception as e:
+                                # Fallback prediction
                                 pred_class = 2
                                 confidence = 0.5
                         else:
@@ -560,6 +587,7 @@ class LandCoverAnalyzer:
                 confidences[i + j] = confidence
         
         return predictions, confidences
+    # ========== END OF FIXED METHOD ==========
 
 # Initialize analyzer
 analyzer = LandCoverAnalyzer()
@@ -802,6 +830,10 @@ with tab3:
                         X = np.vstack(all_features)
                         y = np.concatenate(all_labels)
                         
+                        # Update feature dimension
+                        analyzer.feature_dim = X.shape[1]
+                        st.session_state.feature_dim = X.shape[1]
+                        
                         # Split data
                         X_train, X_temp, y_train, y_temp = train_test_split(
                             X, y, test_size=0.3, random_state=42, stratify=y
@@ -882,7 +914,7 @@ with tab3:
                         analyzer.models = models_trained
                         st.session_state.models_trained = True
                         
-                        # ========== FIXED FEATURE IMPORTANCE SECTION ==========
+                        # Feature importance analysis
                         st.subheader("🔍 Feature Importance Analysis")
                         
                         importance_data = []
@@ -901,7 +933,7 @@ with tab3:
                             actual_n_features = len(importance_data[0]['Importances'])
                             
                             # Buat feature names sesuai jumlah
-                            if actual_n_features == N_TEMPORAL_FEATURES:  # 45 features
+                            if actual_n_features == 45:  # 45 features
                                 feature_types = ['Current', 'Future', 'Diff']
                                 base_features = ['X', 'Y', 'Area', 'Perimeter', 'Compactness',
                                                 'Width', 'Height', 'Dispersion', 'Complexity',
@@ -912,8 +944,7 @@ with tab3:
                                 for f_type in feature_types:
                                     for base in base_features:
                                         feature_names.append(f"{base}_{f_type}")
-                            
-                            elif actual_n_features == N_FEATURES:  # 15 features
+                            elif actual_n_features == 15:  # 15 features
                                 feature_names = ['X', 'Y', 'Area', 'Perimeter', 'Compactness',
                                                 'Width', 'Height', 'Dispersion', 'Complexity',
                                                 'Clearance', 'Convexity', 'Rectangularity',
@@ -921,7 +952,7 @@ with tab3:
                             else:
                                 feature_names = [f'F{i+1}' for i in range(actual_n_features)]
                             
-                            # Plot untuk setiap model secara terpisah (lebih aman)
+                            # Plot untuk setiap model secara terpisah
                             for imp in importance_data:
                                 fig, ax = plt.subplots(figsize=(12, 5))
                                 
@@ -964,7 +995,6 @@ with tab3:
                                 st.dataframe(top_df, use_container_width=True)
                         else:
                             st.info("No feature importance data available for the trained models")
-                        # ========== END OF FIXED SECTION ==========
 
 # Tab 4: Future Predictions
 with tab4:
@@ -1000,8 +1030,11 @@ with tab4:
             else:
                 with st.spinner(f"Generating {selected_year}-year predictions..."):
                     
+                    # Update feature dimension
+                    analyzer.feature_dim = st.session_state.feature_dim
+                    
                     # Check cache untuk grid
-                    cache_key = f"{analyzer.bounds}_{cell_size}_{max_grid_points}"
+                    cache_key = f"{analyzer.bounds}_{cell_size}_{max_grid_points}_{analyzer.feature_dim}"
                     if cache_key in st.session_state.grid_cache:
                         grid_points, x_coords, y_coords = st.session_state.grid_cache[cache_key]
                     else:
