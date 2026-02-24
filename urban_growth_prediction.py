@@ -102,6 +102,12 @@ if 'feature_dim' not in st.session_state:
     st.session_state.feature_dim = N_TEMPORAL_FEATURES
 if 'reclassified_gdfs' not in st.session_state:
     st.session_state.reclassified_gdfs = {}
+if 'current_predictions' not in st.session_state:
+    st.session_state.current_predictions = None
+if 'current_grid_info' not in st.session_state:
+    st.session_state.current_grid_info = None
+if 'selected_prediction_year' not in st.session_state:
+    st.session_state.selected_prediction_year = 25
 
 # Title with animation - INDONESIA
 st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
@@ -742,36 +748,6 @@ def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None):
     
     return m
 
-# Fungsi untuk mengkonversi grid predictions ke GeoDataFrame
-def predictions_to_geodataframe(predictions, confidences, x_coords, y_coords, sample_step=1):
-    """Convert prediction grid to GeoDataFrame"""
-    geometries = []
-    properties = []
-    
-    pred_reshaped = predictions.reshape(len(y_coords), len(x_coords))
-    conf_reshaped = confidences.reshape(len(y_coords), len(x_coords))
-    
-    for i, y in enumerate(y_coords):
-        for j, x in enumerate(x_coords):
-            if (i * len(x_coords) + j) % sample_step == 0:
-                cell_size_x = (x_coords[-1] - x_coords[0]) / len(x_coords)
-                cell_size_y = (y_coords[-1] - y_coords[0]) / len(y_coords)
-                
-                geom = box(x - cell_size_x/2, y - cell_size_y/2,
-                          x + cell_size_x/2, y + cell_size_y/2)
-                
-                pred_class = int(pred_reshaped[i, j])
-                class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
-                
-                geometries.append(geom)
-                properties.append({
-                    'gridcode': pred_class,
-                    'LandCover': class_name,
-                    'confidence': float(conf_reshaped[i, j])
-                })
-    
-    return gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
-
 # Initialize analyzer
 analyzer = LandCoverAnalyzer()
 
@@ -1244,7 +1220,7 @@ with tab3:
                         else:
                             st.info("ℹ️ Tidak ada data kepentingan fitur untuk model yang dilatih")
 
-# ========== TAB 4: PREDIKSI MASA DEPAN ==========
+# ========== TAB 4: PREDIKSI MASA DEPAN (FIXED VERSION) ==========
 with tab4:
     st.header("🔮 Prediksi Tutupan Lahan Masa Depan")
     
@@ -1259,11 +1235,16 @@ with tab4:
         with col1:
             st.subheader("⚙️ Pengaturan Prediksi")
             if years_options:
-                selected_year = st.selectbox("Pilih tahun prediksi", years_options, 
-                                            format_func=lambda x: f"{x} tahun ke depan")
+                selected_year = st.selectbox(
+                    "Pilih tahun prediksi", 
+                    years_options, 
+                    format_func=lambda x: f"{x} tahun ke depan",
+                    key="year_selector"
+                )
+                st.session_state.selected_prediction_year = selected_year
             else:
                 st.warning("⚠️ Harap pilih tahun prediksi di sidebar")
-                selected_year = 25
+                selected_year = st.session_state.selected_prediction_year
             
         with col2:
             st.subheader("🤖 Pilih Model untuk Prediksi")
@@ -1271,10 +1252,21 @@ with tab4:
                 "Pilih model yang akan digunakan",
                 options=list(analyzer.models.keys()),
                 default=list(analyzer.models.keys())[:2] if analyzer.models else [],
-                format_func=lambda x: f"{x} - {model_descriptions.get(x, '')}"
+                format_func=lambda x: f"{x} - {model_descriptions.get(x, '')}",
+                key="model_selector"
             )
         
-        if st.button("🔮 Generate Prediksi", type="primary", use_container_width=True):
+        # Button to generate predictions
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            generate_button = st.button(
+                "🔮 Generate Prediksi Baru", 
+                type="primary", 
+                use_container_width=True,
+                key="generate_prediction_btn"
+            )
+        
+        if generate_button:
             if not predict_models:
                 st.warning("⚠️ Harap pilih setidaknya satu model")
             else:
@@ -1339,98 +1331,183 @@ with tab4:
                     
                     status_text.text("✅ Prediksi selesai!")
                     
-                    # ========== VISUALISASI DENGAN BASEMAP ==========
-                    if show_prediction_map:
-                        st.subheader("🗺️ Peta Prediksi dengan Basemap")
+                    # Store in session state
+                    st.session_state.current_predictions = all_predictions
+                    st.session_state.current_grid_info = {
+                        'x_coords': x_coords,
+                        'y_coords': y_coords,
+                        'bounds': analyzer.bounds,
+                        'n_x': len(x_coords),
+                        'n_y': len(y_coords),
+                        'selected_year': selected_year
+                    }
+                    
+                    st.success(f"✅ Berhasil menghasilkan {len(all_predictions)} skenario prediksi")
+        
+        # Display predictions if available
+        if st.session_state.current_predictions is not None:
+            all_predictions = st.session_state.current_predictions
+            grid_info = st.session_state.current_grid_info
+            
+            x_coords = grid_info['x_coords']
+            y_coords = grid_info['y_coords']
+            pred_year = grid_info.get('selected_year', 25)
+            
+            # Only show if there are predictions
+            if all_predictions and len(all_predictions) > 0:
+                
+                # ========== VISUALISASI DENGAN BASEMAP ==========
+                if show_prediction_map:
+                    st.subheader("🗺️ Peta Prediksi dengan Basemap")
+                    
+                    # Pilih scenario untuk ditampilkan di peta
+                    scenario_options = list(all_predictions.keys())
+                    
+                    if scenario_options:
+                        # Create a unique key for the selector that includes the list of options
+                        selector_key = f"map_selector_{hash(frozenset(scenario_options))}"
                         
-                        # Pilih scenario untuk ditampilkan di peta
                         selected_scenario = st.selectbox(
                             "Pilih skenario untuk ditampilkan di peta",
-                            options=list(all_predictions.keys()),
-                            format_func=lambda x: all_predictions[x]['display_name']
+                            options=scenario_options,
+                            format_func=lambda x: all_predictions[x]['display_name'],
+                            key=selector_key
                         )
                         
                         if selected_scenario:
                             pred_data = all_predictions[selected_scenario]
                             
-                            # Konversi ke GeoDataFrame dengan sampling
-                            sample_step = max(1, len(y_coords) * len(x_coords) // 2000)  # Sampling untuk performa
-                            pred_gdf = predictions_to_geodataframe(
-                                pred_data['predictions'], 
-                                pred_data['confidences'],
-                                x_coords, y_coords, 
-                                sample_step
-                            )
-                            
-                            # Hitung center
-                            center = [(y_coords[0] + y_coords[-1]) / 2, (x_coords[0] + x_coords[-1]) / 2]
-                            
-                            # Buat peta
-                            m = create_folium_map(
-                                pred_gdf, 
-                                f"Prediksi {selected_year} Tahun - {all_predictions[selected_scenario]['display_name']}",
-                                selected_basemap, 
-                                center
-                            )
-                            
-                            if m is not None:
-                                folium_static(m, width=1000, height=600)
-                            
-                            # Tampilkan statistik
-                            st.info(f"Menampilkan {len(pred_gdf)} dari {len(pred_data['predictions'])} titik prediksi (sampling untuk performa)")
+                            # Validasi data
+                            if (pred_data['predictions'] is not None and 
+                                len(pred_data['predictions']) > 0 and
+                                pred_data['confidences'] is not None and
+                                len(pred_data['confidences']) > 0):
+                                
+                                try:
+                                    # Konversi ke GeoDataFrame dengan sampling
+                                    total_cells = len(y_coords) * len(x_coords)
+                                    sample_step = max(1, total_cells // 1000)  # Sampling untuk performa
+                                    
+                                    # Buat GeoDataFrame
+                                    geometries = []
+                                    properties = []
+                                    
+                                    pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
+                                    conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
+                                    
+                                    point_count = 0
+                                    cells_added = 0
+                                    
+                                    for i, y in enumerate(y_coords):
+                                        for j, x in enumerate(x_coords):
+                                            if point_count % sample_step == 0:
+                                                cell_size_x = (x_coords[-1] - x_coords[0]) / len(x_coords)
+                                                cell_size_y = (y_coords[-1] - y_coords[0]) / len(y_coords)
+                                                
+                                                geom = box(x - cell_size_x/2, y - cell_size_y/2,
+                                                          x + cell_size_x/2, y + cell_size_y/2)
+                                                
+                                                pred_class = int(pred_reshaped[i, j])
+                                                class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
+                                                
+                                                geometries.append(geom)
+                                                properties.append({
+                                                    'gridcode': pred_class,
+                                                    'LandCover': class_name,
+                                                    'confidence': float(conf_reshaped[i, j])
+                                                })
+                                                cells_added += 1
+                                            point_count += 1
+                                    
+                                    if geometries:
+                                        pred_gdf = gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
+                                        
+                                        # Hitung center
+                                        center = [(y_coords[0] + y_coords[-1]) / 2, (x_coords[0] + x_coords[-1]) / 2]
+                                        
+                                        # Buat peta
+                                        m = create_folium_map(
+                                            pred_gdf, 
+                                            f"Prediksi {pred_year} Tahun - {all_predictions[selected_scenario]['display_name']}",
+                                            selected_basemap, 
+                                            center
+                                        )
+                                        
+                                        if m is not None:
+                                            folium_static(m, width=1000, height=600)
+                                        
+                                        st.info(f"📊 Menampilkan {cells_added} dari {total_cells} sel prediksi (sampling 1:{sample_step} untuk performa)")
+                                    else:
+                                        st.warning("⚠️ Tidak dapat membuat GeoDataFrame dari prediksi")
+                                except Exception as e:
+                                    st.error(f"Error membuat peta: {str(e)}")
+                            else:
+                                st.warning("⚠️ Data prediksi tidak valid untuk skenario ini")
+                    else:
+                        st.warning("⚠️ Tidak ada skenario prediksi tersedia")
+                
+                # Visualization dengan matplotlib
+                st.subheader("🗺️ Visualisasi Grid Prediksi")
+                
+                # Buat tabs untuk setiap skenario
+                scenario_items = list(all_predictions.items())
+                if scenario_items:
+                    # Limit to first 4 scenarios to avoid too many tabs
+                    display_items = scenario_items[:4]
+                    viz_tabs = st.tabs([data['display_name'] for _, data in display_items])
                     
-                    # Visualization dengan matplotlib (opsional)
-                    st.subheader("🗺️ Visualisasi Grid Prediksi")
-                    
-                    # Pilih tab untuk visualisasi matplotlib
-                    viz_tabs = st.tabs([data['display_name'] for data in all_predictions.values()][:4])
-                    
-                    for idx, (scenario_name, pred_data) in enumerate(list(all_predictions.items())[:4]):
+                    for idx, (scenario_name, pred_data) in enumerate(display_items):
                         with viz_tabs[idx]:
-                            pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
-                            conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                fig, ax = plt.subplots(figsize=(8, 6))
+                            try:
+                                pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
+                                conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
                                 
-                                # Create custom colormap
-                                from matplotlib.colors import ListedColormap
-                                colors = ['#3498db', '#f1c40f', '#e74c3c']
-                                cmap = ListedColormap(colors)
+                                col1, col2 = st.columns(2)
                                 
-                                im = ax.imshow(pred_reshaped, cmap=cmap,
-                                              extent=[x_coords[0], x_coords[-1],
-                                                      y_coords[0], y_coords[-1]],
-                                              origin='lower', aspect='auto', vmin=1, vmax=3)
+                                with col1:
+                                    fig, ax = plt.subplots(figsize=(8, 6))
+                                    
+                                    # Create custom colormap
+                                    from matplotlib.colors import ListedColormap
+                                    colors = ['#3498db', '#f1c40f', '#e74c3c']
+                                    cmap = ListedColormap(colors)
+                                    
+                                    im = ax.imshow(pred_reshaped, cmap=cmap,
+                                                  extent=[x_coords[0], x_coords[-1],
+                                                          y_coords[0], y_coords[-1]],
+                                                  origin='lower', aspect='auto', vmin=1, vmax=3)
+                                    
+                                    # Create colorbar with labels
+                                    cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3])
+                                    cbar.ax.set_yticklabels(['Badan Air', 'Lahan Terbuka', 'Bangunan'])
+                                    
+                                    ax.set_title('Prediksi Tutupan Lahan')
+                                    ax.set_xlabel('Bujur')
+                                    ax.set_ylabel('Lintang')
+                                    st.pyplot(fig)
+                                    plt.close(fig)  # Clean up memory
                                 
-                                # Create colorbar with labels
-                                cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3])
-                                cbar.ax.set_yticklabels(['Badan Air', 'Lahan Terbuka', 'Bangunan'])
-                                
-                                ax.set_title('Prediksi Tutupan Lahan')
-                                ax.set_xlabel('Bujur')
-                                ax.set_ylabel('Lintang')
-                                st.pyplot(fig)
-                            
-                            with col2:
-                                fig, ax = plt.subplots(figsize=(8, 6))
-                                im = ax.imshow(conf_reshaped, cmap='RdYlGn',
-                                              extent=[x_coords[0], x_coords[-1],
-                                                      y_coords[0], y_coords[-1]],
-                                              origin='lower', aspect='auto', vmin=0, vmax=1)
-                                plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
-                                ax.set_title('Peta Kepercayaan')
-                                ax.set_xlabel('Bujur')
-                                ax.set_ylabel('Lintang')
-                                st.pyplot(fig)
-                    
-                    # Statistics
-                    st.subheader("📊 Statistik Prediksi")
-                    
-                    stats_data = []
-                    for scenario_name, pred_data in all_predictions.items():
+                                with col2:
+                                    fig, ax = plt.subplots(figsize=(8, 6))
+                                    im = ax.imshow(conf_reshaped, cmap='RdYlGn',
+                                                  extent=[x_coords[0], x_coords[-1],
+                                                          y_coords[0], y_coords[-1]],
+                                                  origin='lower', aspect='auto', vmin=0, vmax=1)
+                                    plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
+                                    ax.set_title('Peta Kepercayaan')
+                                    ax.set_xlabel('Bujur')
+                                    ax.set_ylabel('Lintang')
+                                    st.pyplot(fig)
+                                    plt.close(fig)  # Clean up memory
+                            except Exception as e:
+                                st.error(f"Error visualisasi untuk {pred_data['display_name']}: {str(e)}")
+                
+                # Statistics
+                st.subheader("📊 Statistik Prediksi")
+                
+                stats_data = []
+                for scenario_name, pred_data in all_predictions.items():
+                    try:
                         unique, counts = np.unique(pred_data['predictions'], return_counts=True)
                         percentages = counts / len(pred_data['predictions']) * 100
                         
@@ -1445,163 +1522,200 @@ with tab4:
                             stats[class_name] = f"{c} ({p:.1f}%)"
                         
                         stats_data.append(stats)
-                    
+                    except Exception as e:
+                        st.error(f"Error statistik untuk {scenario_name}: {str(e)}")
+                
+                if stats_data:
                     stats_df = pd.DataFrame(stats_data)
                     st.dataframe(stats_df, use_container_width=True, hide_index=True)
-                    
-                    # Store predictions for export
-                    st.session_state.predictions = all_predictions
-                    st.session_state.grid_info = {
-                        'x_coords': x_coords,
-                        'y_coords': y_coords,
-                        'bounds': analyzer.bounds
-                    }
+            else:
+                st.info("👈 Klik tombol 'Generate Prediksi Baru' untuk memulai")
 
 # ========== TAB 5: LAPORAN & EKSPOR ==========
 with tab5:
     st.header("📈 Laporan & Ekspor")
     
-    if 'predictions' not in st.session_state:
+    if st.session_state.current_predictions is None:
         st.warning("⚠️ Harap generate prediksi terlebih dahulu di tab 'Prediksi Masa Depan'")
     else:
-        predictions = st.session_state.predictions
-        grid_info = st.session_state.grid_info
+        predictions = st.session_state.current_predictions
+        grid_info = st.session_state.current_grid_info
         
-        st.subheader("📥 Opsi Unduhan")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 📊 Laporan Ringkasan")
+        if predictions and grid_info:
+            st.subheader("📥 Opsi Unduhan")
             
-            # Create comprehensive report
-            report_data = []
-            for scenario_name, pred_data in predictions.items():
-                unique, counts = np.unique(pred_data['predictions'], return_counts=True)
-                percentages = counts / len(pred_data['predictions']) * 100
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📊 Laporan Ringkasan")
                 
-                for u, c, p in zip(unique, counts, percentages):
-                    class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}')
-                    report_data.append({
-                        'Skenario': pred_data.get('display_name', scenario_name.replace('_', ' ').title()),
-                        'Tutupan Lahan': class_name,
-                        'Jumlah': c,
-                        'Persentase': f"{p:.2f}%",
-                        'Rata-rata Kepercayaan': f"{np.mean(pred_data['confidences']):.3f}"
-                    })
-            
-            report_df = pd.DataFrame(report_data)
-            
-            # Download buttons
-            csv = report_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Unduh Laporan Ringkasan (CSV)",
-                data=csv,
-                file_name=f"laporan_prediksi_tutupan_lahan_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-            
-            # Generate GeoJSON for predictions
-            st.markdown("### 🗺️ Ekspor sebagai GeoJSON")
-            
-            for scenario_name, pred_data in list(predictions.items())[:2]:
-                display_name = pred_data.get('display_name', scenario_name.replace('_', ' ').title())
-                if st.button(f"🗺️ Generate GeoJSON untuk {display_name}", key=f"btn_{scenario_name}"):
-                    with st.spinner("⏳ Menghasilkan GeoJSON..."):
-                        # Create GeoDataFrame dengan sampling
-                        x_coords = grid_info['x_coords']
-                        y_coords = grid_info['y_coords']
+                # Create comprehensive report
+                report_data = []
+                for scenario_name, pred_data in predictions.items():
+                    try:
+                        unique, counts = np.unique(pred_data['predictions'], return_counts=True)
+                        percentages = counts / len(pred_data['predictions']) * 100
                         
-                        # Sampling untuk GeoJSON
-                        sample_step = max(1, len(y_coords) * len(x_coords) // 1000)
-                        pred_gdf = predictions_to_geodataframe(
-                            pred_data['predictions'], 
-                            pred_data['confidences'],
-                            x_coords, y_coords, 
-                            sample_step
-                        )
-                        
-                        if len(pred_gdf) > 0:
-                            geojson_str = pred_gdf.to_json()
-                            st.download_button(
-                                label=f"📥 Unduh {display_name} (GeoJSON)",
-                                data=geojson_str,
-                                file_name=f"{scenario_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson",
-                                mime="application/json",
-                                key=f"geojson_{scenario_name}",
-                                use_container_width=True
+                        for u, c, p in zip(unique, counts, percentages):
+                            class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}')
+                            report_data.append({
+                                'Skenario': pred_data.get('display_name', scenario_name.replace('_', ' ').title()),
+                                'Tutupan Lahan': class_name,
+                                'Jumlah': c,
+                                'Persentase': f"{p:.2f}%",
+                                'Rata-rata Kepercayaan': f"{np.mean(pred_data['confidences']):.3f}"
+                            })
+                    except Exception as e:
+                        st.error(f"Error membuat laporan untuk {scenario_name}: {str(e)}")
+                
+                if report_data:
+                    report_df = pd.DataFrame(report_data)
+                    
+                    # Download buttons
+                    csv = report_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Unduh Laporan Ringkasan (CSV)",
+                        data=csv,
+                        file_name=f"laporan_prediksi_tutupan_lahan_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                
+                # Generate GeoJSON for predictions
+                st.markdown("### 🗺️ Ekspor sebagai GeoJSON")
+                
+                for scenario_name, pred_data in list(predictions.items())[:2]:
+                    display_name = pred_data.get('display_name', scenario_name.replace('_', ' ').title())
+                    if st.button(f"🗺️ Generate GeoJSON untuk {display_name}", key=f"btn_{scenario_name}"):
+                        with st.spinner("⏳ Menghasilkan GeoJSON..."):
+                            try:
+                                x_coords = grid_info['x_coords']
+                                y_coords = grid_info['y_coords']
+                                
+                                # Sampling untuk GeoJSON
+                                total_cells = len(y_coords) * len(x_coords)
+                                sample_step = max(1, total_cells // 1000)
+                                
+                                pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
+                                conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
+                                
+                                geometries = []
+                                properties = []
+                                point_count = 0
+                                
+                                for i, y in enumerate(y_coords):
+                                    for j, x in enumerate(x_coords):
+                                        if point_count % sample_step == 0:
+                                            cell_size_x = (x_coords[-1] - x_coords[0]) / len(x_coords)
+                                            cell_size_y = (y_coords[-1] - y_coords[0]) / len(y_coords)
+                                            
+                                            geom = box(x - cell_size_x/2, y - cell_size_y/2,
+                                                      x + cell_size_x/2, y + cell_size_y/2)
+                                            
+                                            pred_class = int(pred_reshaped[i, j])
+                                            class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
+                                            
+                                            geometries.append(geom)
+                                            properties.append({
+                                                'gridcode': pred_class,
+                                                'land_cover': class_name,
+                                                'confidence': float(conf_reshaped[i, j])
+                                            })
+                                        point_count += 1
+                                
+                                if geometries:
+                                    pred_gdf = gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
+                                    
+                                    geojson_str = pred_gdf.to_json()
+                                    st.download_button(
+                                        label=f"📥 Unduh {display_name} (GeoJSON)",
+                                        data=geojson_str,
+                                        file_name=f"{scenario_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson",
+                                        mime="application/json",
+                                        key=f"geojson_{scenario_name}",
+                                        use_container_width=True
+                                    )
+                                    
+                                    st.info(f"📊 Mengekspor {len(pred_gdf)} dari {total_cells} sel (sampling 1:{sample_step})")
+                            except Exception as e:
+                                st.error(f"Error membuat GeoJSON: {str(e)}")
+            
+            with col2:
+                st.markdown("### 📊 Galeri Visualisasi")
+                
+                # Simplified comparison plots
+                if len(predictions) > 1:
+                    # Pisahkan berdasarkan kebijakan
+                    without_policy_data = {k: v for k, v in predictions.items() if 'tanpa_kebijakan' in k}
+                    with_policy_data = {k: v for k, v in predictions.items() if 'dengan_kebijakan' in k}
+                    
+                    if without_policy_data and with_policy_data:
+                        try:
+                            fig = make_subplots(
+                                rows=1, cols=2,
+                                subplot_titles=['Tanpa Kebijakan', 'Dengan Kebijakan'],
+                                specs=[[{'type': 'pie'}, {'type': 'pie'}]]
                             )
                             
-                            st.info(f"📊 Mengekspor {len(pred_gdf)} dari {len(pred_data['predictions'])} titik (sampling)")
-        
-        with col2:
-            st.markdown("### 📊 Galeri Visualisasi")
-            
-            # Simplified comparison plots
-            if len(predictions) > 1:
-                # Pisahkan berdasarkan kebijakan
-                without_policy_data = {k: v for k, v in predictions.items() if 'tanpa_kebijakan' in k}
-                with_policy_data = {k: v for k, v in predictions.items() if 'dengan_kebijakan' in k}
-                
-                if without_policy_data and with_policy_data:
-                    fig = make_subplots(
-                        rows=1, cols=2,
-                        subplot_titles=['Tanpa Kebijakan', 'Dengan Kebijakan'],
-                        specs=[[{'type': 'pie'}, {'type': 'pie'}]]
-                    )
+                            # Rata-rata prediksi tanpa kebijakan
+                            all_preds_no_policy = np.mean([v['predictions'] for v in without_policy_data.values()], axis=0)
+                            unique_no, counts_no = np.unique(all_preds_no_policy, return_counts=True)
+                            
+                            labels_no = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_no]
+                            colors_no = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_no]
+                            
+                            fig.add_trace(
+                                go.Pie(labels=labels_no,
+                                      values=counts_no,
+                                      marker=dict(colors=colors_no)),
+                                row=1, col=1
+                            )
+                            
+                            # Rata-rata prediksi dengan kebijakan
+                            all_preds_with_policy = np.mean([v['predictions'] for v in with_policy_data.values()], axis=0)
+                            unique_with, counts_with = np.unique(all_preds_with_policy, return_counts=True)
+                            
+                            labels_with = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_with]
+                            colors_with = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_with]
+                            
+                            fig.add_trace(
+                                go.Pie(labels=labels_with,
+                                      values=counts_with,
+                                      marker=dict(colors=colors_with)),
+                                row=1, col=2
+                            )
+                            
+                            fig.update_layout(title_text="Perbandingan Skenario - Rata-rata Prediksi",
+                                             showlegend=True,
+                                             height=400)
+                            st.plotly_chart(fig, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Error membuat pie chart: {str(e)}")
                     
-                    # Rata-rata prediksi tanpa kebijakan
-                    all_preds_no_policy = np.mean([v['predictions'] for v in without_policy_data.values()], axis=0)
-                    unique_no, counts_no = np.unique(all_preds_no_policy, return_counts=True)
+                    # Confidence heatmap
+                    st.markdown("### 🔥 Peta Panas Kepercayaan Prediksi")
                     
-                    labels_no = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_no]
-                    colors_no = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_no]
-                    
-                    fig.add_trace(
-                        go.Pie(labels=labels_no,
-                              values=counts_no,
-                              marker=dict(colors=colors_no)),
-                        row=1, col=1
-                    )
-                    
-                    # Rata-rata prediksi dengan kebijakan
-                    all_preds_with_policy = np.mean([v['predictions'] for v in with_policy_data.values()], axis=0)
-                    unique_with, counts_with = np.unique(all_preds_with_policy, return_counts=True)
-                    
-                    labels_with = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_with]
-                    colors_with = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_with]
-                    
-                    fig.add_trace(
-                        go.Pie(labels=labels_with,
-                              values=counts_with,
-                              marker=dict(colors=colors_with)),
-                        row=1, col=2
-                    )
-                    
-                    fig.update_layout(title_text="Perbandingan Skenario - Rata-rata Prediksi",
-                                     showlegend=True,
-                                     height=400)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                # Confidence heatmap
-                st.markdown("### 🔥 Peta Panas Kepercayaan Prediksi")
-                
-                # Rata-rata kepercayaan
-                avg_confidence = np.mean([v['confidences'] for v in predictions.values()], axis=0)
-                conf_reshaped = avg_confidence.reshape(len(grid_info['y_coords']), 
-                                                       len(grid_info['x_coords']))
-                
-                fig, ax = plt.subplots(figsize=(10, 6))
-                im = ax.imshow(conf_reshaped, cmap='RdYlGn', 
-                              extent=[grid_info['x_coords'][0], grid_info['x_coords'][-1],
-                                     grid_info['y_coords'][0], grid_info['y_coords'][-1]],
-                              origin='lower', aspect='auto', vmin=0, vmax=1)
-                plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
-                ax.set_title('Rata-rata Kepercayaan Prediksi')
-                ax.set_xlabel('Bujur')
-                ax.set_ylabel('Lintang')
-                st.pyplot(fig)
+                    try:
+                        # Rata-rata kepercayaan
+                        avg_confidence = np.mean([v['confidences'] for v in predictions.values()], axis=0)
+                        conf_reshaped = avg_confidence.reshape(len(grid_info['y_coords']), 
+                                                               len(grid_info['x_coords']))
+                        
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        im = ax.imshow(conf_reshaped, cmap='RdYlGn', 
+                                      extent=[grid_info['x_coords'][0], grid_info['x_coords'][-1],
+                                             grid_info['y_coords'][0], grid_info['y_coords'][-1]],
+                                      origin='lower', aspect='auto', vmin=0, vmax=1)
+                        plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
+                        ax.set_title('Rata-rata Kepercayaan Prediksi')
+                        ax.set_xlabel('Bujur')
+                        ax.set_ylabel('Lintang')
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    except Exception as e:
+                        st.error(f"Error membuat heatmap: {str(e)}")
+        else:
+            st.info("Tidak ada data prediksi yang tersedia")
 
 # Footer - INDONESIA
 st.markdown("---")
