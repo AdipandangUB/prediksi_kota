@@ -110,6 +110,29 @@ st.markdown("""
     .download-link:hover {
         text-decoration: underline;
     }
+    .policy-info {
+        background-color: #e8f4fd;
+        border-left: 5px solid #2196F3;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+    .protected-class {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 5px 10px;
+        border-radius: 3px;
+        display: inline-block;
+        margin: 2px;
+    }
+    .dynamic-class {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 5px 10px;
+        border-radius: 3px;
+        display: inline-block;
+        margin: 2px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -134,6 +157,8 @@ if 'selected_prediction_year' not in st.session_state:
     st.session_state.selected_prediction_year = 25
 if 'sample_data_loaded' not in st.session_state:
     st.session_state.sample_data_loaded = False
+if 'policy_effectiveness' not in st.session_state:
+    st.session_state.policy_effectiveness = None
 
 # Title with animation - INDONESIA
 st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
@@ -178,7 +203,6 @@ def load_sample_data():
             temp_dir.mkdir(exist_ok=True)
             
             # File IDs yang benar dari link Google Drive
-            # Catatan: File ID didapat dari URL sharing
             file_ids = {
                 "Land_Cover_Kota_Makassar_Tahun_2009.geojson": "1abc123def456ghi789",  # Ganti dengan ID sebenarnya
                 "Land_Cover_Kota_Makassar_Tahun_2015.geojson": "1def456ghi789jkl012"   # Ganti dengan ID sebenarnya
@@ -270,10 +294,15 @@ with st.sidebar:
         help="Jumlah tahun ke depan untuk diprediksi"
     )
     
-    # Scenarios - INDONESIA
+    # Scenarios - INDONESIA with enhanced description
     st.header("🎯 Skenario")
     without_policy = st.checkbox("Tanpa Kebijakan (Pertumbuhan Alami)", value=True)
-    with_policy = st.checkbox("Dengan Kebijakan (Perlindungan Badan Air)", value=True)
+    with_policy = st.checkbox(
+        "Dengan Kebijakan (Perlindungan Ekologis)", 
+        value=True,
+        help="🌊 Badan Air dan 🌳 Vegetasi Rapat dilindungi dan tidak berubah\n" +
+             "🌿 Vegetasi Jarang, 🏙️ Lahan Terbangun, dan 🏜️ Lahan Terbuka dapat berkembang"
+    )
     
     # Advanced settings - INDONESIA
     with st.expander("🔧 Pengaturan Lanjutan"):
@@ -285,6 +314,8 @@ with st.sidebar:
         max_grid_points = st.number_input("Titik grid maksimum", 1000, 50000, 10000,
                                          help="Jumlah maksimum titik grid")
         show_prediction_map = st.checkbox("Tampilkan peta prediksi dengan basemap", value=True)
+        policy_buffer = st.slider("Buffer zona lindung (derajat)", 0.0, 0.01, 0.001,
+                                  help="Area buffer di sekitar badan air yang juga dilindungi")
 
 # Main content area - INDONESIA
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -295,30 +326,42 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Laporan & Ekspor"
 ])
 
-# ========== KLASIFIKASI TUTUPAN LAHAN BARU ==========
-# Kelas baru: 1: Badan Air, 2: Lahan Terbuka (gabungan vegetasi jarang dan padat), 3: Bangunan
+# ========== KLASIFIKASI TUTUPAN LAHAN BARU (5 KELAS) ==========
+# Kelas baru: 
+# 1: Badan Air
+# 2: Vegetasi Rapat (hutan, perkebunan lebat)
+# 3: Vegetasi Jarang (semak, padang rumput, lahan pertanian)
+# 4: Lahan Terbangun (permukiman, industri, infrastruktur)
+# 5: Lahan Terbuka (tanah kosong, pasir, tambang)
+
 land_cover_classes_new = {
-    1: {"name": "Badan Air", "color": "#3498db", "type": "water", "description": "Sungai, danau, waduk"},
-    2: {"name": "Lahan Terbuka", "color": "#f1c40f", "type": "open_land", "description": "Vegetasi jarang, vegetasi padat, semak, lahan kosong"},
-    3: {"name": "Bangunan", "color": "#e74c3c", "type": "built_up", "description": "Permukiman, industri, infrastruktur"}
+    1: {"name": "Badan Air", "color": "#3498db", "type": "water", "description": "Sungai, danau, waduk, laut", "protected": True},
+    2: {"name": "Vegetasi Rapat", "color": "#2ecc71", "type": "dense_vegetation", "description": "Hutan lebat, perkebunan dengan kanopi rapat", "protected": True},
+    3: {"name": "Vegetasi Jarang", "color": "#f1c40f", "type": "sparse_vegetation", "description": "Semak, padang rumput, lahan pertanian", "protected": False},
+    4: {"name": "Lahan Terbangun", "color": "#e74c3c", "type": "built_up", "description": "Permukiman, industri, infrastruktur", "protected": False},
+    5: {"name": "Lahan Terbuka", "color": "#95a5a6", "type": "open_land", "description": "Tanah kosong, pasir, tambang, lahan tandus", "protected": False}
 }
 
-# Fungsi untuk reklasifikasi dari gridcode asli ke kelas baru
+# Fungsi untuk reklasifikasi dari gridcode asli ke 5 kelas baru
 def reclassify_land_cover(gridcode):
     """
-    Reklasifikasi tutupan lahan:
+    Reklasifikasi tutupan lahan menjadi 5 kelas:
     - gridcode 1 (Badan Air) -> kelas 1 (Badan Air)
-    - gridcode 2 (Vegetasi Rapat) dan 3 (Vegetasi Jarang) -> kelas 2 (Lahan Terbuka)
-    - Untuk bangunan, jika ada gridcode 4, akan masuk kelas 3 (Bangunan)
+    - gridcode 2 (Vegetasi Rapat) -> kelas 2 (Vegetasi Rapat)
+    - gridcode 3 (Vegetasi Jarang) -> kelas 3 (Vegetasi Jarang)
+    - gridcode 4 (Bangunan) -> kelas 4 (Lahan Terbangun)
+    - Lainnya (jika ada) -> kelas 5 (Lahan Terbuka)
     """
     if gridcode == 1:
         return 1  # Badan Air
-    elif gridcode in [2, 3]:
-        return 2  # Lahan Terbuka
+    elif gridcode == 2:
+        return 2  # Vegetasi Rapat
+    elif gridcode == 3:
+        return 3  # Vegetasi Jarang
     elif gridcode == 4:
-        return 3  # Bangunan
+        return 4  # Lahan Terbangun
     else:
-        return 2  # Default ke Lahan Terbuka jika tidak dikenal
+        return 5  # Lahan Terbuka (default untuk kode lain)
 
 class LandCoverAnalyzer:
     """Main class for land cover analysis and prediction"""
@@ -333,6 +376,7 @@ class LandCoverAnalyzer:
         self.label_encoder = LabelEncoder()
         self.bounds = None
         self.water_bodies = None
+        self.dense_vegetation = None
         self.feature_cache = {}
         self.feature_dim = N_TEMPORAL_FEATURES  # Default feature dimension
         self.reclassified_gdfs = {}  # Untuk menyimpan GDF yang sudah direklasifikasi
@@ -360,14 +404,16 @@ class LandCoverAnalyzer:
             if gdf.crs is None:
                 gdf.set_crs(epsg=4326, inplace=True)
             
-            # Create reclassified version
+            # Create reclassified version (5 kelas)
             gdf_reclass = gdf.copy()
             gdf_reclass['gridcode_original'] = gdf_reclass['gridcode']
             gdf_reclass['gridcode'] = gdf_reclass['gridcode_original'].apply(reclassify_land_cover)
             gdf_reclass['LandCover'] = gdf_reclass['gridcode'].map({
                 1: 'Badan Air',
-                2: 'Lahan Terbuka',
-                3: 'Bangunan'
+                2: 'Vegetasi Rapat',
+                3: 'Vegetasi Jarang',
+                4: 'Lahan Terbangun',
+                5: 'Lahan Terbuka'
             })
             
             # Store both versions
@@ -434,13 +480,18 @@ class LandCoverAnalyzer:
         sample_size = min(5000, len(gdf1_reclass))
         year1_sample = gdf1_reclass.sample(n=sample_size, random_state=42) if len(gdf1_reclass) > sample_size else gdf1_reclass
         
-        # Get water bodies for both years (menggunakan kelas baru)
+        # Get water bodies and dense vegetation for both years
         water1 = gdf1_reclass[gdf1_reclass['gridcode'] == 1]
         water2 = gdf2_reclass[gdf2_reclass['gridcode'] == 1]
+        dense_veg1 = gdf1_reclass[gdf1_reclass['gridcode'] == 2]
+        dense_veg2 = gdf2_reclass[gdf2_reclass['gridcode'] == 2]
         
-        # Union of water bodies
+        # Union of protected areas
         all_water = list(water1.geometry) + list(water2.geometry)
+        all_dense_veg = list(dense_veg1.geometry) + list(dense_veg2.geometry)
+        
         self.water_bodies = unary_union(all_water) if all_water else None
+        self.dense_vegetation = unary_union(all_dense_veg) if all_dense_veg else None
         
         # Sample points from both years
         for idx, row in year1_sample.iterrows():
@@ -467,7 +518,7 @@ class LandCoverAnalyzer:
         return np.array(features), np.array(labels)
     
     def calculate_transition_matrix(self, gdf1, gdf2):
-        """Calculate transition probabilities between land cover classes using reclassified data"""
+        """Calculate transition probabilities between land cover classes using reclassified data (5 kelas)"""
         # Gunakan reclassified GDFs
         gdf1_reclass = self.reclassified_gdfs.get(gdf1.attrs.get('year', 0), gdf1)
         gdf2_reclass = self.reclassified_gdfs.get(gdf2.attrs.get('year', 0), gdf2)
@@ -541,14 +592,24 @@ class LandCoverAnalyzer:
         
         return grid_points, x_coords, y_coords
     
-    def is_water_body(self, point, buffer=0.001):
-        """Check if point is near water body"""
-        if self.water_bodies is None or self.water_bodies.is_empty:
-            return False
-        try:
-            return point.intersects(self.water_bodies.buffer(buffer))
-        except:
-            return False
+    def is_protected_area(self, point, buffer=0.001):
+        """Check if point is in protected area (water body or dense vegetation)"""
+        is_water = False
+        is_dense_veg = False
+        
+        if self.water_bodies is not None and not self.water_bodies.is_empty:
+            try:
+                is_water = point.intersects(self.water_bodies.buffer(buffer))
+            except:
+                is_water = False
+        
+        if self.dense_vegetation is not None and not self.dense_vegetation.is_empty:
+            try:
+                is_dense_veg = point.intersects(self.dense_vegetation.buffer(buffer))
+            except:
+                is_dense_veg = False
+        
+        return is_water or is_dense_veg
     
     def train_model(self, model_name, X_train, y_train, X_val, y_val):
         """Train individual model with hyperparameter tuning"""
@@ -633,13 +694,13 @@ class LandCoverAnalyzer:
             return self.create_evolutionary_ensemble(X_train, y_train), None
     
     def create_fuzzy_system(self):
-        """Create Fuzzy Logic system for land cover classification"""
+        """Create Fuzzy Logic system for land cover classification (5 classes)"""
         try:
             # Define fuzzy variables
             x_pos = ctrl.Antecedent(np.arange(0, 1.1, 0.1), 'x_position')
             y_pos = ctrl.Antecedent(np.arange(0, 1.1, 0.1), 'y_position')
             area = ctrl.Antecedent(np.arange(0, 1, 0.01), 'area')
-            land_cover = ctrl.Consequent(np.arange(1, 4, 0.1), 'land_cover')
+            land_cover = ctrl.Consequent(np.arange(1, 6, 0.1), 'land_cover')
             
             # Define membership functions
             x_pos['rendah'] = fuzz.trimf(x_pos.universe, [0, 0, 0.5])
@@ -648,17 +709,23 @@ class LandCoverAnalyzer:
             y_pos['rendah'] = fuzz.trimf(y_pos.universe, [0, 0, 0.5])
             y_pos['tinggi'] = fuzz.trimf(y_pos.universe, [0.5, 1, 1])
             
-            area['kecil'] = fuzz.trimf(area.universe, [0, 0, 0.5])
-            area['besar'] = fuzz.trimf(area.universe, [0.5, 1, 1])
+            area['kecil'] = fuzz.trimf(area.universe, [0, 0, 0.3])
+            area['sedang'] = fuzz.trimf(area.universe, [0.2, 0.5, 0.8])
+            area['besar'] = fuzz.trimf(area.universe, [0.7, 1, 1])
             
+            # Define membership functions for 5 classes
             land_cover['air'] = fuzz.trimf(land_cover.universe, [1, 1, 2])
-            land_cover['lahan_terbuka'] = fuzz.trimf(land_cover.universe, [1.5, 2, 2.5])
-            land_cover['bangunan'] = fuzz.trimf(land_cover.universe, [2.5, 3, 3])
+            land_cover['vegetasi_rapat'] = fuzz.trimf(land_cover.universe, [1.5, 2, 2.5])
+            land_cover['vegetasi_jarang'] = fuzz.trimf(land_cover.universe, [2.5, 3, 3.5])
+            land_cover['terbangun'] = fuzz.trimf(land_cover.universe, [3.5, 4, 4.5])
+            land_cover['terbuka'] = fuzz.trimf(land_cover.universe, [4.5, 5, 5])
             
             # Simplified rules
             rules = [
-                ctrl.Rule(x_pos['rendah'] & y_pos['rendah'] & area['kecil'], land_cover['lahan_terbuka']),
+                ctrl.Rule(x_pos['rendah'] & y_pos['rendah'] & area['kecil'], land_cover['vegetasi_jarang']),
                 ctrl.Rule(x_pos['tinggi'] & y_pos['tinggi'] & area['besar'], land_cover['air']),
+                ctrl.Rule(x_pos['rendah'] & y_pos['tinggi'] & area['sedang'], land_cover['vegetasi_rapat']),
+                ctrl.Rule(x_pos['tinggi'] & y_pos['rendah'] & area['kecil'], land_cover['terbangun']),
             ]
             
             land_cover_ctrl = ctrl.ControlSystem(rules)
@@ -681,29 +748,31 @@ class LandCoverAnalyzer:
         return ensemble
     
     def predict_future(self, model_name, model, grid_points, years, transition_matrix=None, 
-                      with_policy=False, batch_size=1000):
-        """Predict future land cover"""
+                      with_policy=False, batch_size=1000, policy_buffer=0.001):
+        """
+        Predict future land cover (5 classes) dengan aturan kebijakan:
+        - Jika with_policy=True, Badan Air (1) dan Vegetasi Rapat (2) tidak berubah
+        - Hanya Vegetasi Jarang (3), Lahan Terbangun (4), dan Lahan Terbuka (5) yang dapat berubah
+        """
         predictions = np.zeros(len(grid_points), dtype=int)
         confidences = np.zeros(len(grid_points))
         
-        # Get feature dimension from model if available
-        feature_dim = self.feature_dim
-        if model is not None and hasattr(model, 'n_features_in_'):
-            feature_dim = model.n_features_in_
-        
-        for i in range(0, len(grid_points), batch_size):
-            batch = grid_points[i:i+batch_size]
+        # Untuk skenario dengan kebijakan, kita perlu melacak prediksi awal
+        if with_policy:
+            # Lakukan prediksi awal tanpa kebijakan terlebih dahulu
+            temp_predictions = np.zeros(len(grid_points), dtype=int)
+            temp_confidences = np.zeros(len(grid_points))
             
-            for j, point_data in enumerate(batch):
-                point = point_data['geometry']
+            # Get feature dimension from model if available
+            feature_dim = self.feature_dim
+            if model is not None and hasattr(model, 'n_features_in_'):
+                feature_dim = model.n_features_in_
+            
+            # Prediksi awal untuk semua grid points
+            for i in range(0, len(grid_points), batch_size):
+                batch = grid_points[i:i+batch_size]
                 
-                # Check if point is water body (for policy scenario)
-                is_water = with_policy and self.is_water_body(point)
-                
-                if is_water:
-                    pred_class = 1  # Badan Air
-                    confidence = 1.0
-                else:
+                for j, point_data in enumerate(batch):
                     if model_name == 'MC' and transition_matrix is not None:
                         current_probs = np.ones(len(transition_matrix)) / len(transition_matrix)
                         for _ in range(years // 25):
@@ -713,30 +782,24 @@ class LandCoverAnalyzer:
                         
                     elif model_name == 'FL' and model is not None:
                         try:
-                            # Simple fuzzy logic prediction
-                            pred_class = 2  # Lahan Terbuka
-                            confidence = 0.6
+                            pred_class = 3  # Vegetasi Jarang (default)
+                            confidence = 0.5
                         except:
-                            pred_class = 2
+                            pred_class = 3
                             confidence = 0.5
                     else:
                         if model is not None:
-                            # Gunakan fitur yang sesuai dengan dimensi model
                             features = point_data['features'].copy()
                             
-                            # Pastikan fitur memiliki dimensi yang benar
                             if len(features) < feature_dim:
-                                # Pad dengan nol jika kurang
                                 features = np.pad(features, (0, feature_dim - len(features)), 
                                                 'constant', constant_values=0)
                             elif len(features) > feature_dim:
-                                # Potong jika lebih
                                 features = features[:feature_dim]
                             
                             features = features.reshape(1, -1)
                             
                             try:
-                                # Scale features if scaler is fitted
                                 if hasattr(self.scaler, 'mean_'):
                                     features = self.scaler.transform(features)
                                 
@@ -747,22 +810,185 @@ class LandCoverAnalyzer:
                                 else:
                                     confidence = 0.7
                             except Exception as e:
-                                # Fallback prediction
-                                pred_class = 2
+                                pred_class = 3
                                 confidence = 0.5
                         else:
-                            pred_class = 2
+                            pred_class = 3
                             confidence = 0.5
+                    
+                    temp_predictions[i + j] = pred_class
+                    temp_confidences[i + j] = confidence
+            
+            # Terapkan aturan kebijakan: Badan Air (1) dan Vegetasi Rapat (2) tidak berubah
+            # Hanya kelas 3, 4, 5 yang menggunakan hasil prediksi
+            for idx in range(len(grid_points)):
+                # Cek apakah titik ini adalah area lindung berdasarkan data historis
+                point = grid_points[idx]['geometry']
+                is_protected = self.is_protected_area(point, policy_buffer)
                 
-                predictions[i + j] = pred_class
-                confidences[i + j] = confidence
+                # Jika titik adalah area lindung, tetap sebagai kelas aslinya
+                if is_protected:
+                    # Cari kelas asli dari data historis terbaru
+                    latest_year = max(self.years)
+                    latest_gdf = self.get_reclassified_gdf(latest_year)
+                    
+                    if latest_gdf is not None:
+                        # Cari kelas terdekat
+                        distances = latest_gdf.geometry.distance(point)
+                        nearest_idx = distances.idxmin()
+                        original_class = latest_gdf.loc[nearest_idx, 'gridcode']
+                        
+                        # Jika kelas asli adalah 1 atau 2, pertahankan
+                        if original_class in [1, 2]:
+                            predictions[idx] = original_class
+                            confidences[idx] = 1.0
+                        else:
+                            # Jika bukan, gunakan prediksi dengan batasan
+                            pred_class = temp_predictions[idx]
+                            if pred_class in [1, 2]:
+                                # Pilih kelas alternatif dari yang diizinkan
+                                if hasattr(model, 'predict_proba') and model is not None:
+                                    features = grid_points[idx]['features'].copy()
+                                    if len(features) < feature_dim:
+                                        features = np.pad(features, (0, feature_dim - len(features)), 
+                                                        'constant', constant_values=0)
+                                    elif len(features) > feature_dim:
+                                        features = features[:feature_dim]
+                                    
+                                    features = features.reshape(1, -1)
+                                    
+                                    try:
+                                        if hasattr(self.scaler, 'mean_'):
+                                            features = self.scaler.transform(features)
+                                        
+                                        probs = model.predict_proba(features)[0]
+                                        allowed_indices = [2, 3, 4]  # Index untuk kelas 3,4,5
+                                        allowed_probs = [probs[i] for i in allowed_indices if i < len(probs)]
+                                        
+                                        if allowed_probs:
+                                            max_prob_idx = np.argmax(allowed_probs)
+                                            pred_class = allowed_indices[max_prob_idx] + 1
+                                            confidence = allowed_probs[max_prob_idx]
+                                        else:
+                                            pred_class = 3
+                                            confidence = 0.5
+                                    except:
+                                        pred_class = 3
+                                        confidence = 0.5
+                                else:
+                                    pred_class = 3
+                                    confidence = 0.5
+                            
+                            predictions[idx] = pred_class
+                            confidences[idx] = confidence
+                    else:
+                        # Jika tidak ada data historis, gunakan pendekatan sederhana
+                        predictions[idx] = 1 if self.is_water_body(point) else 2
+                        confidences[idx] = 0.8
+                else:
+                    # Untuk area non-lindung, gunakan prediksi dengan batasan
+                    pred_class = temp_predictions[idx]
+                    
+                    # Jika hasil prediksi adalah kelas lindung (1 atau 2), 
+                    # pilih kelas alternatif dari yang diizinkan
+                    if pred_class in [1, 2]:
+                        if hasattr(model, 'predict_proba') and model is not None:
+                            features = grid_points[idx]['features'].copy()
+                            if len(features) < feature_dim:
+                                features = np.pad(features, (0, feature_dim - len(features)), 
+                                                'constant', constant_values=0)
+                            elif len(features) > feature_dim:
+                                features = features[:feature_dim]
+                            
+                            features = features.reshape(1, -1)
+                            
+                            try:
+                                if hasattr(self.scaler, 'mean_'):
+                                    features = self.scaler.transform(features)
+                                
+                                probs = model.predict_proba(features)[0]
+                                allowed_indices = [2, 3, 4]  # Index untuk kelas 3,4,5
+                                allowed_probs = [probs[i] for i in allowed_indices if i < len(probs)]
+                                
+                                if allowed_probs:
+                                    max_prob_idx = np.argmax(allowed_probs)
+                                    pred_class = allowed_indices[max_prob_idx] + 1
+                                    confidence = allowed_probs[max_prob_idx]
+                                else:
+                                    pred_class = 3
+                                    confidence = 0.5
+                            except:
+                                pred_class = 3
+                                confidence = 0.5
+                        else:
+                            pred_class = 3
+                            confidence = 0.5
+                    
+                    predictions[idx] = pred_class
+                    confidences[idx] = confidence
+        
+        else:
+            # Tanpa kebijakan: gunakan prediksi normal
+            feature_dim = self.feature_dim
+            if model is not None and hasattr(model, 'n_features_in_'):
+                feature_dim = model.n_features_in_
+            
+            for i in range(0, len(grid_points), batch_size):
+                batch = grid_points[i:i+batch_size]
+                
+                for j, point_data in enumerate(batch):
+                    if model_name == 'MC' and transition_matrix is not None:
+                        current_probs = np.ones(len(transition_matrix)) / len(transition_matrix)
+                        for _ in range(years // 25):
+                            current_probs = current_probs @ transition_matrix
+                        pred_class = np.argmax(current_probs) + 1
+                        confidence = np.max(current_probs)
+                        
+                    elif model_name == 'FL' and model is not None:
+                        try:
+                            pred_class = 3
+                            confidence = 0.5
+                        except:
+                            pred_class = 3
+                            confidence = 0.5
+                    else:
+                        if model is not None:
+                            features = point_data['features'].copy()
+                            
+                            if len(features) < feature_dim:
+                                features = np.pad(features, (0, feature_dim - len(features)), 
+                                                'constant', constant_values=0)
+                            elif len(features) > feature_dim:
+                                features = features[:feature_dim]
+                            
+                            features = features.reshape(1, -1)
+                            
+                            try:
+                                if hasattr(self.scaler, 'mean_'):
+                                    features = self.scaler.transform(features)
+                                
+                                pred_class = model.predict(features)[0]
+                                if hasattr(model, 'predict_proba'):
+                                    probs = model.predict_proba(features)[0]
+                                    confidence = np.max(probs)
+                                else:
+                                    confidence = 0.7
+                            except Exception as e:
+                                pred_class = 3
+                                confidence = 0.5
+                        else:
+                            pred_class = 3
+                            confidence = 0.5
+                    
+                    predictions[i + j] = pred_class
+                    confidences[i + j] = confidence
         
         return predictions, confidences
 
 
-# Fungsi untuk membuat peta folium dengan basemap
-def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None):
-    """Create Folium map with basemap for GeoJSON visualization"""
+# Fungsi untuk membuat peta folium dengan basemap (5 kelas)
+def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None, show_protected=True):
+    """Create Folium map with basemap for GeoJSON visualization (5 classes)"""
     if gdf is None or len(gdf) == 0:
         return None
     
@@ -793,16 +1019,20 @@ def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None):
     else:
         m = folium.Map(location=center, zoom_start=12)
     
-    # Create color mapping for new classes
+    # Create color mapping for 5 classes
     def get_color(gridcode):
         if gridcode == 1:
             return '#3498db'  # Blue - Water
         elif gridcode == 2:
-            return '#f1c40f'  # Yellow - Open Land
+            return '#2ecc71'  # Green - Dense Vegetation
         elif gridcode == 3:
+            return '#f1c40f'  # Yellow - Sparse Vegetation
+        elif gridcode == 4:
             return '#e74c3c'  # Red - Built-up
+        elif gridcode == 5:
+            return '#95a5a6'  # Grey - Open Land
         else:
-            return '#95a5a6'  # Grey - Unknown
+            return '#34495e'  # Dark Grey - Unknown
     
     # Add GeoJSON to map
     folium.GeoJson(
@@ -821,13 +1051,15 @@ def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None):
         )
     ).add_to(m)
     
-    # Add legend
+    # Add legend for 5 classes with protection info
     legend_html = '''
     <div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border-radius: 5px; border: 2px solid grey; box-shadow: 3px 3px 5px rgba(0,0,0,0.3);">
         <p><strong>Legenda Tutupan Lahan</strong></p>
-        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air</p>
-        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka</p>
-        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Bangunan</p>
+        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air (Dilindungi)</p>
+        <p><span style="background-color: #2ecc71; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Rapat (Dilindungi)</p>
+        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Jarang (Dinamis)</p>
+        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbangun (Dinamis)</p>
+        <p><span style="background-color: #95a5a6; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka (Dinamis)</p>
     </div>
     '''
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -867,9 +1099,6 @@ with tab1:
             with st.spinner("⏳ Memuat data contoh..."):
                 try:
                     # Untuk demonstrasi, kita akan menggunakan file yang sudah diupload
-                    # Dalam implementasi sebenarnya, file harus diupload atau didownload dari Google Drive
-                    
-                    # Simulasi loading data
                     st.info("📌 Catatan: Untuk menggunakan data sesungguhnya, upload file GeoJSON dari folder Google Drive.")
                     st.markdown("""
                     **Langkah-langkah menggunakan data contoh:**
@@ -889,7 +1118,8 @@ with tab1:
     <div style='background-color: #fff8e7; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
         <p>📌 Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk menganalisis pola perubahan</p>
         <p>🗂️ Format file: <strong>GeoJSON</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
-        <p>🔄 <strong>Reklasifikasi Otomatis:</strong> Data akan direklasifikasi menjadi 3 kelas: Badan Air (1), Lahan Terbuka (2), Bangunan (3)</p>
+        <p>🔄 <strong>Reklasifikasi Otomatis:</strong> Data akan direklasifikasi menjadi 5 kelas: Badan Air (1), Vegetasi Rapat (2), Vegetasi Jarang (3), Lahan Terbangun (4), Lahan Terbuka (5)</p>
+        <p>🛡️ <strong>Kelas Dilindungi:</strong> Badan Air (1) dan Vegetasi Rapat (2) akan dilindungi dalam skenario kebijakan</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -899,13 +1129,13 @@ with tab1:
         st.subheader("📁 File 1 (Tahun Terdahulu)")
         file1 = st.file_uploader("Pilih GeoJSON pertama", type=['geojson'], key='file1')
         year1 = st.number_input("Tahun untuk File 1", min_value=1900, max_value=2100, 
-                                value=2009, step=1, key='year1')  # Default ke 2009 untuk contoh
+                                value=2009, step=1, key='year1')
         
     with col2:
         st.subheader("📁 File 2 (Tahun Terbaru)")
         file2 = st.file_uploader("Pilih GeoJSON kedua", type=['geojson'], key='file2')
         year2 = st.number_input("Tahun untuk File 2", min_value=1900, max_value=2100, 
-                                value=2015, step=1, key='year2')  # Default ke 2015 untuk contoh
+                                value=2015, step=1, key='year2')
     
     # Option for additional files
     with st.expander("➕ Tambah file lainnya (opsional)"):
@@ -958,18 +1188,25 @@ with tab1:
                     st.success(f"✅ Berhasil memuat {len(analyzer.gdfs)} file dari tahun: {', '.join(map(str, analyzer.years))}")
                     
                     # Show data summary with original and reclassified
-                    st.subheader("📊 Ringkasan Data (Setelah Reklasifikasi)")
+                    st.subheader("📊 Ringkasan Data (Setelah Reklasifikasi 5 Kelas)")
                     
                     summary_data = []
                     for year in analyzer.years:
                         gdf_reclass = analyzer.get_reclassified_gdf(year)
                         if gdf_reclass is not None:
                             counts = gdf_reclass['gridcode'].value_counts()
+                            protected_count = counts.get(1, 0) + counts.get(2, 0)
+                            dynamic_count = counts.get(3, 0) + counts.get(4, 0) + counts.get(5, 0)
+                            
                             summary_data.append({
                                 'Tahun': year,
-                                'Badan Air': counts.get(1, 0),
-                                'Lahan Terbuka': counts.get(2, 0),
-                                'Bangunan': counts.get(3, 0),
+                                'Badan Air (1)': counts.get(1, 0),
+                                'Vegetasi Rapat (2)': counts.get(2, 0),
+                                'Vegetasi Jarang (3)': counts.get(3, 0),
+                                'Lahan Terbangun (4)': counts.get(4, 0),
+                                'Lahan Terbuka (5)': counts.get(5, 0),
+                                'Total Dilindungi': protected_count,
+                                'Total Dinamis': dynamic_count,
                                 'Total': len(gdf_reclass)
                             })
                     
@@ -1000,14 +1237,20 @@ with tab1:
                                         folium_static(m, width=800, height=500)
                                     
                                     # Show statistics
-                                    col1, col2, col3 = st.columns(3)
+                                    col1, col2, col3, col4, col5, col6 = st.columns(6)
                                     counts = gdf_reclass['gridcode'].value_counts()
                                     with col1:
-                                        st.metric("Badan Air", counts.get(1, 0))
+                                        st.metric("Badan Air 🛡️", counts.get(1, 0))
                                     with col2:
-                                        st.metric("Lahan Terbuka", counts.get(2, 0))
+                                        st.metric("Vegetasi Rapat 🛡️", counts.get(2, 0))
                                     with col3:
-                                        st.metric("Bangunan", counts.get(3, 0))
+                                        st.metric("Vegetasi Jarang", counts.get(3, 0))
+                                    with col4:
+                                        st.metric("Lahan Terbangun", counts.get(4, 0))
+                                    with col5:
+                                        st.metric("Lahan Terbuka", counts.get(5, 0))
+                                    with col6:
+                                        st.metric("Total Dilindungi", counts.get(1, 0) + counts.get(2, 0))
 
 # ========== TAB 2: ANALISIS HISTORIS ==========
 with tab2:
@@ -1050,8 +1293,10 @@ with tab2:
                     'Periode': f"{year1}-{year2}",
                     'Tahun': year2 - year1,
                     'Perubahan Air': len(gdf2_reclass[gdf2_reclass['gridcode'] == 1]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 1]),
-                    'Perubahan Lahan Terbuka': len(gdf2_reclass[gdf2_reclass['gridcode'] == 2]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 2]),
-                    'Perubahan Bangunan': len(gdf2_reclass[gdf2_reclass['gridcode'] == 3]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 3]),
+                    'Perubahan Veg. Rapat': len(gdf2_reclass[gdf2_reclass['gridcode'] == 2]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 2]),
+                    'Perubahan Veg. Jarang': len(gdf2_reclass[gdf2_reclass['gridcode'] == 3]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 3]),
+                    'Perubahan Terbangun': len(gdf2_reclass[gdf2_reclass['gridcode'] == 4]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 4]),
+                    'Perubahan Terbuka': len(gdf2_reclass[gdf2_reclass['gridcode'] == 5]) - len(gdf1_reclass[gdf1_reclass['gridcode'] == 5]),
                 }
                 change_data.append(changes)
         
@@ -1068,21 +1313,23 @@ with tab2:
                 # Calculate annual change rates
                 st.subheader("📉 Laju Perubahan Tahunan")
                 annual_rates = change_df.copy()
-                for col in ['Perubahan Air', 'Perubahan Lahan Terbuka', 'Perubahan Bangunan']:
+                for col in ['Perubahan Air', 'Perubahan Veg. Rapat', 'Perubahan Veg. Jarang', 
+                           'Perubahan Terbangun', 'Perubahan Terbuka']:
                     annual_rates[f'Laju {col}'] = (annual_rates[col] / annual_rates['Tahun']).round(2)
                 
-                st.dataframe(annual_rates[['Periode', 'Laju Perubahan Air', 'Laju Perubahan Lahan Terbuka', 
-                                          'Laju Perubahan Bangunan']], use_container_width=True, hide_index=True)
+                st.dataframe(annual_rates[['Periode', 'Laju Perubahan Air', 'Laju Perubahan Veg. Rapat', 
+                                          'Laju Perubahan Veg. Jarang', 'Laju Perubahan Terbangun',
+                                          'Laju Perubahan Terbuka']], use_container_width=True, hide_index=True)
             
             with col2:
                 st.subheader("🔄 Matriks Transisi")
                 for tm in transition_matrices:
                     with st.expander(f"Matriks Transisi {tm['years']}"):
-                        # Create class names for new classification
-                        class_names = {1: 'Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}
+                        # Create class names for 5 classes
+                        class_names = {1: 'Air', 2: 'Veg Rapat', 3: 'Veg Jarang', 4: 'Terbangun', 5: 'Terbuka'}
                         xticklabels = [class_names.get(c, f'Kelas {c}') for c in tm['classes']]
                         
-                        fig, ax = plt.subplots(figsize=(8, 6))
+                        fig, ax = plt.subplots(figsize=(10, 8))
                         sns.heatmap(tm['matrix'], annot=True, fmt='.2f', cmap='YlOrRd',
                                    xticklabels=xticklabels, yticklabels=xticklabels,
                                    ax=ax)
@@ -1103,8 +1350,10 @@ with tab2:
                     plot_data.append({
                         'Tahun': year,
                         'Air': counts.get(1, 0),
-                        'Lahan Terbuka': counts.get(2, 0),
-                        'Bangunan': counts.get(3, 0)
+                        'Vegetasi Rapat': counts.get(2, 0),
+                        'Vegetasi Jarang': counts.get(3, 0),
+                        'Lahan Terbangun': counts.get(4, 0),
+                        'Lahan Terbuka': counts.get(5, 0)
                     })
             
             plot_df = pd.DataFrame(plot_data)
@@ -1112,14 +1361,20 @@ with tab2:
             # Create interactive plot
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Air'],
-                                     mode='lines+markers', name='Air',
+                                     mode='lines+markers', name='Air (Dilindungi)',
                                      line=dict(color='#3498db', width=3)))
-            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Lahan Terbuka'],
-                                     mode='lines+markers', name='Lahan Terbuka',
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Rapat'],
+                                     mode='lines+markers', name='Vegetasi Rapat (Dilindungi)',
+                                     line=dict(color='#2ecc71', width=3)))
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Jarang'],
+                                     mode='lines+markers', name='Vegetasi Jarang (Dinamis)',
                                      line=dict(color='#f1c40f', width=3)))
-            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Bangunan'],
-                                     mode='lines+markers', name='Bangunan',
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Lahan Terbangun'],
+                                     mode='lines+markers', name='Lahan Terbangun (Dinamis)',
                                      line=dict(color='#e74c3c', width=3)))
+            fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Lahan Terbuka'],
+                                     mode='lines+markers', name='Lahan Terbuka (Dinamis)',
+                                     line=dict(color='#95a5a6', width=3)))
             
             fig.update_layout(
                 title='Evolusi Tutupan Lahan dari Waktu ke Waktu',
@@ -1221,7 +1476,7 @@ with tab3:
                                         avg_matrix = np.mean([tm['matrix'] for tm in analyzer.transition_matrices], axis=0)
                                         models_trained[model_name] = avg_matrix
                                         train_time = time.time() - start_time
-                                        y_pred = np.random.choice([1, 2, 3], size=len(y_test))
+                                        y_pred = np.random.choice([1, 2, 3, 4, 5], size=len(y_test))
                                         accuracy = accuracy_score(y_test, y_pred) * 0.5
                                     else:
                                         accuracy = 0
@@ -1361,6 +1616,23 @@ with tab4:
     else:
         analyzer = st.session_state.historical_data
         
+        # Informasi tentang aturan kebijakan
+        if with_policy:
+            st.markdown("""
+            <div class='policy-info'>
+                <h4>📋 Aturan Skenario Dengan Kebijakan:</h4>
+                <p>
+                    <span class='protected-class'>🌊 Badan Air (1) - Dilindungi</span>
+                    <span class='protected-class'>🌳 Vegetasi Rapat (2) - Dilindungi</span>
+                    <span class='dynamic-class'>🌿 Vegetasi Jarang (3) - Dinamis</span>
+                    <span class='dynamic-class'>🏙️ Lahan Terbangun (4) - Dinamis</span>
+                    <span class='dynamic-class'>🏜️ Lahan Terbuka (5) - Dinamis</span>
+                </p>
+                <p>✅ Kelas yang dilindungi <strong>tidak akan berubah</strong> dalam prediksi<br>
+                ✅ Hanya kelas dinamis yang dapat berkembang sesuai prediksi model</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
         # Prediction settings
         col1, col2 = st.columns(2)
         
@@ -1439,7 +1711,8 @@ with tab4:
                         if without_policy:
                             pred_no_policy, conf_no_policy = analyzer.predict_future(
                                 model_name, model, grid_points, selected_year, 
-                                transition_matrix, with_policy=False
+                                transition_matrix, with_policy=False, batch_size=1000,
+                                policy_buffer=policy_buffer if 'policy_buffer' in locals() else 0.001
                             )
                             all_predictions[f"{model_name}_tanpa_kebijakan"] = {
                                 'predictions': pred_no_policy,
@@ -1451,7 +1724,8 @@ with tab4:
                         if with_policy:
                             pred_with_policy, conf_with_policy = analyzer.predict_future(
                                 model_name, model, grid_points, selected_year, 
-                                transition_matrix, with_policy=True
+                                transition_matrix, with_policy=True, batch_size=1000,
+                                policy_buffer=policy_buffer if 'policy_buffer' in locals() else 0.001
                             )
                             all_predictions[f"{model_name}_dengan_kebijakan"] = {
                                 'predictions': pred_with_policy,
@@ -1540,7 +1814,9 @@ with tab4:
                                                           x + cell_size_x/2, y + cell_size_y/2)
                                                 
                                                 pred_class = int(pred_reshaped[i, j])
-                                                class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
+                                                class_name = {1: 'Badan Air', 2: 'Vegetasi Rapat', 
+                                                            3: 'Vegetasi Jarang', 4: 'Lahan Terbangun',
+                                                            5: 'Lahan Terbuka'}.get(pred_class, 'Unknown')
                                                 
                                                 geometries.append(geom)
                                                 properties.append({
@@ -1599,19 +1875,20 @@ with tab4:
                                 with col1:
                                     fig, ax = plt.subplots(figsize=(8, 6))
                                     
-                                    # Create custom colormap
+                                    # Create custom colormap for 5 classes
                                     from matplotlib.colors import ListedColormap
-                                    colors = ['#3498db', '#f1c40f', '#e74c3c']
+                                    colors = ['#3498db', '#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6']
                                     cmap = ListedColormap(colors)
                                     
                                     im = ax.imshow(pred_reshaped, cmap=cmap,
                                                   extent=[x_coords[0], x_coords[-1],
                                                           y_coords[0], y_coords[-1]],
-                                                  origin='lower', aspect='auto', vmin=1, vmax=3)
+                                                  origin='lower', aspect='auto', vmin=1, vmax=5)
                                     
                                     # Create colorbar with labels
-                                    cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3])
-                                    cbar.ax.set_yticklabels(['Badan Air', 'Lahan Terbuka', 'Bangunan'])
+                                    cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3, 4, 5])
+                                    cbar.ax.set_yticklabels(['Badan Air', 'Vegetasi Rapat', 'Vegetasi Jarang', 
+                                                            'Lahan Terbangun', 'Lahan Terbuka'])
                                     
                                     ax.set_title('Prediksi Tutupan Lahan')
                                     ax.set_xlabel('Bujur')
@@ -1650,7 +1927,8 @@ with tab4:
                         }
                         
                         for u, c, p in zip(unique, counts, percentages):
-                            class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}')
+                            class_name = {1: 'Badan Air', 2: 'Vegetasi Rapat', 3: 'Vegetasi Jarang',
+                                         4: 'Lahan Terbangun', 5: 'Lahan Terbuka'}.get(u, f'Kelas {u}')
                             stats[class_name] = f"{c} ({p:.1f}%)"
                         
                         stats_data.append(stats)
@@ -1689,10 +1967,12 @@ with tab5:
                         percentages = counts / len(pred_data['predictions']) * 100
                         
                         for u, c, p in zip(unique, counts, percentages):
-                            class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}')
+                            class_name = {1: 'Badan Air', 2: 'Vegetasi Rapat', 3: 'Vegetasi Jarang',
+                                         4: 'Lahan Terbangun', 5: 'Lahan Terbuka'}.get(u, f'Kelas {u}')
                             report_data.append({
                                 'Skenario': pred_data.get('display_name', scenario_name.replace('_', ' ').title()),
                                 'Tutupan Lahan': class_name,
+                                'Status': 'Dilindungi' if u in [1, 2] else 'Dinamis',
                                 'Jumlah': c,
                                 'Persentase': f"{p:.2f}%",
                                 'Rata-rata Kepercayaan': f"{np.mean(pred_data['confidences']):.3f}"
@@ -1708,7 +1988,7 @@ with tab5:
                     st.download_button(
                         label="📥 Unduh Laporan Ringkasan (CSV)",
                         data=csv,
-                        file_name=f"laporan_prediksi_tutupan_lahan_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"laporan_prediksi_tutupan_lahan_5kelas_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
                         use_container_width=True
                     )
@@ -1745,12 +2025,15 @@ with tab5:
                                                       x + cell_size_x/2, y + cell_size_y/2)
                                             
                                             pred_class = int(pred_reshaped[i, j])
-                                            class_name = {1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(pred_class, 'Unknown')
+                                            class_name = {1: 'Badan Air', 2: 'Vegetasi Rapat', 
+                                                        3: 'Vegetasi Jarang', 4: 'Lahan Terbangun',
+                                                        5: 'Lahan Terbuka'}.get(pred_class, 'Unknown')
                                             
                                             geometries.append(geom)
                                             properties.append({
                                                 'gridcode': pred_class,
                                                 'land_cover': class_name,
+                                                'status': 'Dilindungi' if pred_class in [1, 2] else 'Dinamis',
                                                 'confidence': float(conf_reshaped[i, j])
                                             })
                                         point_count += 1
@@ -1762,7 +2045,7 @@ with tab5:
                                     st.download_button(
                                         label=f"📥 Unduh {display_name} (GeoJSON)",
                                         data=geojson_str,
-                                        file_name=f"{scenario_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson",
+                                        file_name=f"{scenario_name}_5kelas_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson",
                                         mime="application/json",
                                         key=f"geojson_{scenario_name}",
                                         use_container_width=True
@@ -1793,8 +2076,9 @@ with tab5:
                             all_preds_no_policy = np.mean([v['predictions'] for v in without_policy_data.values()], axis=0)
                             unique_no, counts_no = np.unique(all_preds_no_policy, return_counts=True)
                             
-                            labels_no = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_no]
-                            colors_no = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_no]
+                            labels_no = [{1: 'Badan Air', 2: 'Vegetasi Rapat', 3: 'Vegetasi Jarang',
+                                         4: 'Lahan Terbangun', 5: 'Lahan Terbuka'}.get(u, f'Kelas {u}') for u in unique_no]
+                            colors_no = ['#3498db' if u==1 else '#2ecc71' if u==2 else '#f1c40f' if u==3 else '#e74c3c' if u==4 else '#95a5a6' for u in unique_no]
                             
                             fig.add_trace(
                                 go.Pie(labels=labels_no,
@@ -1807,8 +2091,9 @@ with tab5:
                             all_preds_with_policy = np.mean([v['predictions'] for v in with_policy_data.values()], axis=0)
                             unique_with, counts_with = np.unique(all_preds_with_policy, return_counts=True)
                             
-                            labels_with = [{1: 'Badan Air', 2: 'Lahan Terbuka', 3: 'Bangunan'}.get(u, f'Kelas {u}') for u in unique_with]
-                            colors_with = ['#3498db' if u==1 else '#f1c40f' if u==2 else '#e74c3c' for u in unique_with]
+                            labels_with = [{1: 'Badan Air', 2: 'Vegetasi Rapat', 3: 'Vegetasi Jarang',
+                                           4: 'Lahan Terbangun', 5: 'Lahan Terbuka'}.get(u, f'Kelas {u}') for u in unique_with]
+                            colors_with = ['#3498db' if u==1 else '#2ecc71' if u==2 else '#f1c40f' if u==3 else '#e74c3c' if u==4 else '#95a5a6' for u in unique_with]
                             
                             fig.add_trace(
                                 go.Pie(labels=labels_with,
@@ -1846,6 +2131,76 @@ with tab5:
                         plt.close(fig)
                     except Exception as e:
                         st.error(f"Error membuat heatmap: {str(e)}")
+                    
+                    # Analisis Efektivitas Kebijakan
+                    if with_policy_data and without_policy_data:
+                        st.markdown("### 📊 Analisis Efektivitas Kebijakan")
+                        
+                        try:
+                            # Hitung rata-rata untuk masing-masing skenario
+                            avg_no_policy = np.mean([v['predictions'] for v in without_policy_data.values()], axis=0)
+                            avg_with_policy = np.mean([v['predictions'] for v in with_policy_data.values()], axis=0)
+                            
+                            # Hitung persentase kelas yang dilindungi
+                            protected_classes_no_policy = np.sum((avg_no_policy == 1) | (avg_no_policy == 2)) / len(avg_no_policy) * 100
+                            protected_classes_with_policy = np.sum((avg_with_policy == 1) | (avg_with_policy == 2)) / len(avg_with_policy) * 100
+                            
+                            # Hitung perubahan
+                            protection_increase = protected_classes_with_policy - protected_classes_no_policy
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "Area Dilindungi - Tanpa Kebijakan",
+                                    f"{protected_classes_no_policy:.1f}%"
+                                )
+                            with col2:
+                                st.metric(
+                                    "Area Dilindungi - Dengan Kebijakan", 
+                                    f"{protected_classes_with_policy:.1f}%",
+                                    delta=f"{protection_increase:+.1f}%"
+                                )
+                            with col3:
+                                st.metric(
+                                    "Efektivitas Kebijakan",
+                                    f"{protection_increase:.1f}%",
+                                    delta_color="normal"
+                                )
+                            
+                            # Bar chart perbandingan
+                            fig = go.Figure()
+                            
+                            # Data untuk chart
+                            categories = ['Badan Air', 'Vegetasi Rapat', 'Vegetasi Jarang', 'Lahan Terbangun', 'Lahan Terbuka']
+                            no_policy_counts = [np.sum(avg_no_policy == i) for i in range(1, 6)]
+                            with_policy_counts = [np.sum(avg_with_policy == i) for i in range(1, 6)]
+                            
+                            fig.add_trace(go.Bar(
+                                name='Tanpa Kebijakan',
+                                x=categories,
+                                y=no_policy_counts,
+                                marker_color=['#3498db', '#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6']
+                            ))
+                            
+                            fig.add_trace(go.Bar(
+                                name='Dengan Kebijakan',
+                                x=categories,
+                                y=with_policy_counts,
+                                marker_color=['#2980b9', '#27ae60', '#f39c12', '#c0392b', '#7f8c8d']
+                            ))
+                            
+                            fig.update_layout(
+                                title='Perbandingan Tutupan Lahan: Dengan vs Tanpa Kebijakan',
+                                xaxis_title='Kelas Tutupan Lahan',
+                                yaxis_title='Jumlah Sel',
+                                barmode='group',
+                                template='plotly_white'
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                        except Exception as e:
+                            st.error(f"Error dalam analisis efektivitas kebijakan: {str(e)}")
         else:
             st.info("Tidak ada data prediksi yang tersedia")
 
@@ -1854,7 +2209,8 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
     <p style='color: white; margin: 0;'>🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan | Dikembangkan oleh Dr. Adipandang Yudono (Scrypt, Sistem Arsitektur, WebGIS Analytics)</p>
-    <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan</p>
+    <p style='color: white; margin: 5px 0 0 0;'>Menggunakan 12 Model ML dengan 2 Skenario Kebijakan | 5 Kelas Tutupan Lahan</p>
+    <p style='color: white; margin: 5px 0 0 0;'>🛡️ Kebijakan Perlindungan: Badan Air (1) dan Vegetasi Rapat (2) dilindungi dari perubahan</p>
     <p style='color: #ffd700; margin: 10px 0 0 0;'>© 2026 - Departemen Perencanan Wilayah & Kota, Fakultas Teknik, UNIVERSITAS BRAWIJAYA</p>
 </div>
 """, unsafe_allow_html=True)
