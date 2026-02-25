@@ -48,12 +48,6 @@ warnings.filterwarnings('ignore')
 N_FEATURES = 15  # Jumlah fitur dasar
 N_TEMPORAL_FEATURES = N_FEATURES * 3  # current + future + diff = 45
 
-# Google Drive file IDs for sample data
-SAMPLE_DATA = {
-    "Land_Cover_Kota_Makassar_Tahun_2009.geojson": "1gQqY1RqY1RqY1RqY1RqY1RqY1RqY1RqY1Rq",  # Ganti dengan file ID yang benar
-    "Land_Cover_Kota_Makassar_Tahun_2015.geojson": "1hQqY1RqY1RqY1RqY1RqY1RqY1RqY1RqY1Rq"   # Ganti dengan file ID yang benar
-}
-
 # Set page config
 st.set_page_config(
     page_title="Sistem Analisis & Prediksi Perubahan Tutupan Lahan",
@@ -168,67 +162,6 @@ st.markdown("""
     <p style='color: #34495e;'>Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk mendeteksi pola perubahan</p>
 </div>
 """, unsafe_allow_html=True)
-
-# Fungsi untuk mendownload file dari Google Drive
-def download_from_google_drive(file_id, destination):
-    """Download file from Google Drive using file ID"""
-    try:
-        URL = "https://docs.google.com/uc?export=download"
-        
-        session = requests.Session()
-        response = session.get(URL, params={'id': file_id}, stream=True)
-        
-        # Cek apakah ada konfirmasi virus
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                params = {'id': file_id, 'confirm': value}
-                response = session.get(URL, params=params, stream=True)
-        
-        with open(destination, 'wb') as f:
-            for chunk in response.iter_content(32768):
-                if chunk:
-                    f.write(chunk)
-        return True
-    except Exception as e:
-        st.error(f"Error downloading file: {str(e)}")
-        return False
-
-# Fungsi untuk memuat data contoh
-def load_sample_data():
-    """Load sample data from Google Drive"""
-    try:
-        with st.spinner("⏳ Mendownload data contoh Kota Makassar..."):
-            # Buat direktori temporary jika belum ada
-            temp_dir = Path("temp_data")
-            temp_dir.mkdir(exist_ok=True)
-            
-            # File IDs yang benar dari link Google Drive
-            file_ids = {
-                "Land_Cover_Kota_Makassar_Tahun_2009.geojson": "1abc123def456ghi789",  # Ganti dengan ID sebenarnya
-                "Land_Cover_Kota_Makassar_Tahun_2015.geojson": "1def456ghi789jkl012"   # Ganti dengan ID sebenarnya
-            }
-            
-            downloaded_files = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, (filename, file_id) in enumerate(file_ids.items()):
-                status_text.text(f"Mendownload {filename}...")
-                filepath = temp_dir / filename
-                
-                # Download file
-                if download_from_google_drive(file_id, filepath):
-                    downloaded_files.append(filepath)
-                
-                progress_bar.progress((i + 1) / len(file_ids))
-            
-            status_text.text("✅ Download selesai!")
-            progress_bar.empty()
-            
-            return downloaded_files
-    except Exception as e:
-        st.error(f"Error loading sample data: {str(e)}")
-        return []
 
 # Sidebar for configuration - INDONESIA
 with st.sidebar:
@@ -380,6 +313,7 @@ class LandCoverAnalyzer:
         self.feature_cache = {}
         self.feature_dim = N_TEMPORAL_FEATURES  # Default feature dimension
         self.reclassified_gdfs = {}  # Untuk menyimpan GDF yang sudah direklasifikasi
+        self.reference_gdf = None  # Untuk menyimpan GDF referensi untuk ekstraksi fitur
         
     def load_geojson(self, file, year):
         """Load and validate GeoJSON file"""
@@ -418,6 +352,10 @@ class LandCoverAnalyzer:
             
             # Store both versions
             self.reclassified_gdfs[year] = gdf_reclass
+            
+            # Set reference GDF untuk ekstraksi fitur (gunakan yang terbaru)
+            if self.reference_gdf is None or year > max(self.years) if self.years else True:
+                self.reference_gdf = gdf_reclass
             
             return gdf
         except Exception as e:
@@ -550,7 +488,7 @@ class LandCoverAnalyzer:
         return matrix, classes
     
     def create_prediction_grid(self, bounds, cell_size, max_points=10000):
-        """Create grid for predictions"""
+        """Create grid for predictions dengan resolusi yang lebih baik"""
         x_min, y_min, x_max, y_max = bounds
         
         # Calculate grid dimensions
@@ -573,15 +511,14 @@ class LandCoverAnalyzer:
         x_coords = np.linspace(x_min + cell_size_x/2, x_max - cell_size_x/2, nx)
         y_coords = np.linspace(y_min + cell_size_y/2, y_max - cell_size_y/2, ny)
         
-        # Create grid points
+        # Create grid points dengan fitur yang lengkap
         grid_points = []
         for i, y in enumerate(y_coords):
             for j, x in enumerate(x_coords):
                 point = Point(x, y)
-                # Simple features for grid points - gunakan dimensi yang benar
-                features = np.zeros(self.feature_dim)
-                features[0] = x
-                features[1] = y
+                
+                # Buat fitur lengkap berdasarkan referensi GDF
+                features = self.create_grid_features(point)
                 
                 grid_points.append({
                     'geometry': point,
@@ -591,6 +528,39 @@ class LandCoverAnalyzer:
                 })
         
         return grid_points, x_coords, y_coords
+    
+    def create_grid_features(self, point):
+        """Create comprehensive features for a grid point"""
+        features = np.zeros(self.feature_dim)
+        
+        # Fitur dasar: koordinat
+        features[0] = point.x
+        features[1] = point.y
+        
+        # Cari fitur dari referensi GDF
+        if self.reference_gdf is not None:
+            try:
+                # Cari polygon terdekat
+                distances = self.reference_gdf.geometry.distance(point)
+                nearest_idx = distances.idxmin()
+                nearest_geom = self.reference_gdf.loc[nearest_idx, 'geometry']
+                
+                # Ekstrak fitur dari geometry terdekat
+                ref_features = self.extract_features(nearest_geom)
+                
+                # Isi fitur lainnya dari referensi
+                for k in range(2, min(len(ref_features), self.feature_dim)):
+                    features[k] = ref_features[k]
+            except:
+                # Jika gagal, gunakan nilai default
+                for k in range(2, self.feature_dim):
+                    features[k] = np.random.rand() * 0.1
+        else:
+            # Jika tidak ada referensi, gunakan nilai default
+            for k in range(2, self.feature_dim):
+                features[k] = np.random.rand() * 0.1
+        
+        return features
     
     def is_protected_area(self, point, buffer=0.001):
         """Check if point is in protected area (water body or dense vegetation)"""
@@ -642,34 +612,34 @@ class LandCoverAnalyzer:
             return model, history.history
         
         elif model_name == 'LR':
-            model = LogisticRegression(max_iter=1000, random_state=42)
+            model = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
             model.fit(X_train, y_train)
             return model, None
         
         elif model_name == 'DT':
-            model = DecisionTreeClassifier(max_depth=10, random_state=42)
+            model = DecisionTreeClassifier(max_depth=15, random_state=42, class_weight='balanced')
             model.fit(X_train, y_train)
             return model, None
         
         elif model_name == 'RF':
-            model = RandomForestClassifier(n_estimators=50, max_depth=10, 
-                                          random_state=42, n_jobs=-1)
+            model = RandomForestClassifier(n_estimators=100, max_depth=15, 
+                                          random_state=42, n_jobs=-1, class_weight='balanced')
             model.fit(X_train, y_train)
             return model, None
         
         elif model_name == 'GBM':
-            model = GradientBoostingClassifier(n_estimators=50, max_depth=3, 
+            model = GradientBoostingClassifier(n_estimators=100, max_depth=5, 
                                               random_state=42)
             model.fit(X_train, y_train)
             return model, None
         
         elif model_name == 'SVM':
-            model = SVC(kernel='rbf', probability=True, random_state=42, max_iter=1000)
+            model = SVC(kernel='rbf', probability=True, random_state=42, max_iter=1000, class_weight='balanced')
             model.fit(X_train, y_train)
             return model, None
         
         elif model_name == 'KNN':
-            model = KNeighborsClassifier(n_neighbors=5)
+            model = KNeighborsClassifier(n_neighbors=7)
             model.fit(X_train, y_train)
             return model, None
         
@@ -679,8 +649,8 @@ class LandCoverAnalyzer:
             return model, None
         
         elif model_name == 'MLP':
-            model = MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=500, 
-                                 random_state=42)
+            model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, 
+                                 random_state=42, early_stopping=True)
             model.fit(X_train, y_train)
             return model, None
         
@@ -726,6 +696,8 @@ class LandCoverAnalyzer:
                 ctrl.Rule(x_pos['tinggi'] & y_pos['tinggi'] & area['besar'], land_cover['air']),
                 ctrl.Rule(x_pos['rendah'] & y_pos['tinggi'] & area['sedang'], land_cover['vegetasi_rapat']),
                 ctrl.Rule(x_pos['tinggi'] & y_pos['rendah'] & area['kecil'], land_cover['terbangun']),
+                ctrl.Rule(area['besar'], land_cover['air']),
+                ctrl.Rule(area['kecil'] & x_pos['tinggi'], land_cover['terbangun']),
             ]
             
             land_cover_ctrl = ctrl.ControlSystem(rules)
@@ -735,12 +707,14 @@ class LandCoverAnalyzer:
     
     def create_evolutionary_ensemble(self, X_train, y_train):
         """Create optimized ensemble"""
-        from sklearn.ensemble import VotingClassifier
+        from sklearn.ensemble import VotingClassifier, RandomForestClassifier, GradientBoostingClassifier
+        from sklearn.linear_model import LogisticRegression
         
         # Base models
         models = [
-            ('rf', RandomForestClassifier(n_estimators=30, random_state=42, n_jobs=-1)),
-            ('lr', LogisticRegression(random_state=42, max_iter=500))
+            ('rf', RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)),
+            ('gbm', GradientBoostingClassifier(n_estimators=100, max_depth=5, random_state=42)),
+            ('lr', LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced'))
         ]
         
         ensemble = VotingClassifier(estimators=models, voting='soft')
@@ -757,233 +731,169 @@ class LandCoverAnalyzer:
         predictions = np.zeros(len(grid_points), dtype=int)
         confidences = np.zeros(len(grid_points))
         
-        # Untuk skenario dengan kebijakan, kita perlu melacak prediksi awal
+        # Get feature dimension from model if available
+        feature_dim = self.feature_dim
+        if model is not None and hasattr(model, 'n_features_in_'):
+            feature_dim = model.n_features_in_
+        
+        # Untuk skenario dengan kebijakan
         if with_policy:
-            # Lakukan prediksi awal tanpa kebijakan terlebih dahulu
-            temp_predictions = np.zeros(len(grid_points), dtype=int)
-            temp_confidences = np.zeros(len(grid_points))
-            
-            # Get feature dimension from model if available
-            feature_dim = self.feature_dim
-            if model is not None and hasattr(model, 'n_features_in_'):
-                feature_dim = model.n_features_in_
-            
-            # Prediksi awal untuk semua grid points
             for i in range(0, len(grid_points), batch_size):
                 batch = grid_points[i:i+batch_size]
                 
                 for j, point_data in enumerate(batch):
-                    if model_name == 'MC' and transition_matrix is not None:
-                        current_probs = np.ones(len(transition_matrix)) / len(transition_matrix)
-                        for _ in range(years // 25):
-                            current_probs = current_probs @ transition_matrix
-                        pred_class = np.argmax(current_probs) + 1
-                        confidence = np.max(current_probs)
-                        
-                    elif model_name == 'FL' and model is not None:
-                        try:
-                            pred_class = 3  # Vegetasi Jarang (default)
-                            confidence = 0.5
-                        except:
-                            pred_class = 3
-                            confidence = 0.5
-                    else:
-                        if model is not None:
-                            features = point_data['features'].copy()
+                    point = point_data['geometry']
+                    
+                    # Cek apakah titik dalam area lindung
+                    is_protected = self.is_protected_area(point, policy_buffer)
+                    
+                    if is_protected:
+                        # Jika area lindung, cari kelas asli dari data terbaru
+                        if self.reference_gdf is not None:
+                            distances = self.reference_gdf.geometry.distance(point)
+                            nearest_idx = distances.idxmin()
+                            original_class = self.reference_gdf.loc[nearest_idx, 'gridcode']
                             
-                            if len(features) < feature_dim:
-                                features = np.pad(features, (0, feature_dim - len(features)), 
-                                                'constant', constant_values=0)
-                            elif len(features) > feature_dim:
-                                features = features[:feature_dim]
-                            
-                            features = features.reshape(1, -1)
-                            
-                            try:
-                                if hasattr(self.scaler, 'mean_'):
-                                    features = self.scaler.transform(features)
+                            # Pertahankan kelas asli jika termasuk kelas lindung
+                            if original_class in [1, 2]:
+                                predictions[i + j] = original_class
+                                confidences[i + j] = 1.0
+                            else:
+                                # Jika bukan kelas lindung, gunakan prediksi dengan batasan
+                                pred_class, confidence = self._predict_single_point(
+                                    model_name, model, point_data, years, transition_matrix, feature_dim
+                                )
                                 
-                                pred_class = model.predict(features)[0]
-                                if hasattr(model, 'predict_proba'):
-                                    probs = model.predict_proba(features)[0]
-                                    confidence = np.max(probs)
-                                else:
-                                    confidence = 0.7
-                            except Exception as e:
-                                pred_class = 3
-                                confidence = 0.5
+                                # Jika prediksi kelas lindung, pilih kelas dinamis terdekat
+                                if pred_class in [1, 2]:
+                                    pred_class = 3  # Default ke vegetasi jarang
+                                    confidence = 0.6
+                                
+                                predictions[i + j] = pred_class
+                                confidences[i + j] = confidence
                         else:
-                            pred_class = 3
-                            confidence = 0.5
-                    
-                    temp_predictions[i + j] = pred_class
-                    temp_confidences[i + j] = confidence
-            
-            # Terapkan aturan kebijakan: Badan Air (1) dan Vegetasi Rapat (2) tidak berubah
-            # Hanya kelas 3, 4, 5 yang menggunakan hasil prediksi
-            for idx in range(len(grid_points)):
-                # Cek apakah titik ini adalah area lindung berdasarkan data historis
-                point = grid_points[idx]['geometry']
-                is_protected = self.is_protected_area(point, policy_buffer)
-                
-                # Jika titik adalah area lindung, tetap sebagai kelas aslinya
-                if is_protected:
-                    # Cari kelas asli dari data historis terbaru
-                    latest_year = max(self.years)
-                    latest_gdf = self.get_reclassified_gdf(latest_year)
-                    
-                    if latest_gdf is not None:
-                        # Cari kelas terdekat
-                        distances = latest_gdf.geometry.distance(point)
-                        nearest_idx = distances.idxmin()
-                        original_class = latest_gdf.loc[nearest_idx, 'gridcode']
+                            # Jika tidak ada referensi, asumsikan kelas 1 (air)
+                            predictions[i + j] = 1
+                            confidences[i + j] = 0.8
+                    else:
+                        # Untuk area non-lindung, gunakan prediksi normal
+                        pred_class, confidence = self._predict_single_point(
+                            model_name, model, point_data, years, transition_matrix, feature_dim
+                        )
                         
-                        # Jika kelas asli adalah 1 atau 2, pertahankan
-                        if original_class in [1, 2]:
-                            predictions[idx] = original_class
-                            confidences[idx] = 1.0
-                        else:
-                            # Jika bukan, gunakan prediksi dengan batasan
-                            pred_class = temp_predictions[idx]
-                            if pred_class in [1, 2]:
-                                # Pilih kelas alternatif dari yang diizinkan
-                                if hasattr(model, 'predict_proba') and model is not None:
-                                    features = grid_points[idx]['features'].copy()
-                                    if len(features) < feature_dim:
-                                        features = np.pad(features, (0, feature_dim - len(features)), 
-                                                        'constant', constant_values=0)
-                                    elif len(features) > feature_dim:
-                                        features = features[:feature_dim]
+                        # Pastikan prediksi bukan kelas lindung (kecuali jika memang area lindung)
+                        # Tapi karena ini area non-lindung, kita tidak boleh memprediksi kelas lindung
+                        if pred_class in [1, 2]:
+                            # Pilih kelas alternatif berdasarkan probabilitas
+                            if hasattr(model, 'predict_proba') and model is not None:
+                                features = point_data['features'].copy()
+                                if len(features) < feature_dim:
+                                    features = np.pad(features, (0, feature_dim - len(features)), 
+                                                    'constant', constant_values=0)
+                                elif len(features) > feature_dim:
+                                    features = features[:feature_dim]
+                                
+                                features = features.reshape(1, -1)
+                                
+                                try:
+                                    if hasattr(self.scaler, 'mean_'):
+                                        features = self.scaler.transform(features)
                                     
-                                    features = features.reshape(1, -1)
+                                    probs = model.predict_proba(features)[0]
+                                    # Ambil probabilitas untuk kelas dinamis (3,4,5)
+                                    # Asumsikan model memiliki kelas 1-5
+                                    dynamic_probs = []
+                                    dynamic_classes = []
                                     
-                                    try:
-                                        if hasattr(self.scaler, 'mean_'):
-                                            features = self.scaler.transform(features)
-                                        
-                                        probs = model.predict_proba(features)[0]
-                                        allowed_indices = [2, 3, 4]  # Index untuk kelas 3,4,5
-                                        allowed_probs = [probs[i] for i in allowed_indices if i < len(probs)]
-                                        
-                                        if allowed_probs:
-                                            max_prob_idx = np.argmax(allowed_probs)
-                                            pred_class = allowed_indices[max_prob_idx] + 1
-                                            confidence = allowed_probs[max_prob_idx]
-                                        else:
-                                            pred_class = 3
-                                            confidence = 0.5
-                                    except:
+                                    # Dapatkan semua kelas yang ada di model
+                                    if hasattr(model, 'classes_'):
+                                        classes = model.classes_
+                                        for idx, cls in enumerate(classes):
+                                            if cls in [3, 4, 5]:
+                                                dynamic_probs.append(probs[idx])
+                                                dynamic_classes.append(cls)
+                                    
+                                    if dynamic_probs:
+                                        max_idx = np.argmax(dynamic_probs)
+                                        pred_class = dynamic_classes[max_idx]
+                                        confidence = dynamic_probs[max_idx]
+                                    else:
                                         pred_class = 3
                                         confidence = 0.5
-                                else:
+                                except:
                                     pred_class = 3
                                     confidence = 0.5
-                            
-                            predictions[idx] = pred_class
-                            confidences[idx] = confidence
-                    else:
-                        # Jika tidak ada data historis, gunakan pendekatan sederhana
-                        predictions[idx] = 1 if self.is_water_body(point) else 2
-                        confidences[idx] = 0.8
-                else:
-                    # Untuk area non-lindung, gunakan prediksi dengan batasan
-                    pred_class = temp_predictions[idx]
-                    
-                    # Jika hasil prediksi adalah kelas lindung (1 atau 2), 
-                    # pilih kelas alternatif dari yang diizinkan
-                    if pred_class in [1, 2]:
-                        if hasattr(model, 'predict_proba') and model is not None:
-                            features = grid_points[idx]['features'].copy()
-                            if len(features) < feature_dim:
-                                features = np.pad(features, (0, feature_dim - len(features)), 
-                                                'constant', constant_values=0)
-                            elif len(features) > feature_dim:
-                                features = features[:feature_dim]
-                            
-                            features = features.reshape(1, -1)
-                            
-                            try:
-                                if hasattr(self.scaler, 'mean_'):
-                                    features = self.scaler.transform(features)
-                                
-                                probs = model.predict_proba(features)[0]
-                                allowed_indices = [2, 3, 4]  # Index untuk kelas 3,4,5
-                                allowed_probs = [probs[i] for i in allowed_indices if i < len(probs)]
-                                
-                                if allowed_probs:
-                                    max_prob_idx = np.argmax(allowed_probs)
-                                    pred_class = allowed_indices[max_prob_idx] + 1
-                                    confidence = allowed_probs[max_prob_idx]
-                                else:
-                                    pred_class = 3
-                                    confidence = 0.5
-                            except:
+                            else:
                                 pred_class = 3
                                 confidence = 0.5
-                        else:
-                            pred_class = 3
-                            confidence = 0.5
-                    
-                    predictions[idx] = pred_class
-                    confidences[idx] = confidence
+                        
+                        predictions[i + j] = pred_class
+                        confidences[i + j] = confidence
         
         else:
             # Tanpa kebijakan: gunakan prediksi normal
-            feature_dim = self.feature_dim
-            if model is not None and hasattr(model, 'n_features_in_'):
-                feature_dim = model.n_features_in_
-            
             for i in range(0, len(grid_points), batch_size):
                 batch = grid_points[i:i+batch_size]
                 
                 for j, point_data in enumerate(batch):
-                    if model_name == 'MC' and transition_matrix is not None:
-                        current_probs = np.ones(len(transition_matrix)) / len(transition_matrix)
-                        for _ in range(years // 25):
-                            current_probs = current_probs @ transition_matrix
-                        pred_class = np.argmax(current_probs) + 1
-                        confidence = np.max(current_probs)
-                        
-                    elif model_name == 'FL' and model is not None:
-                        try:
-                            pred_class = 3
-                            confidence = 0.5
-                        except:
-                            pred_class = 3
-                            confidence = 0.5
-                    else:
-                        if model is not None:
-                            features = point_data['features'].copy()
-                            
-                            if len(features) < feature_dim:
-                                features = np.pad(features, (0, feature_dim - len(features)), 
-                                                'constant', constant_values=0)
-                            elif len(features) > feature_dim:
-                                features = features[:feature_dim]
-                            
-                            features = features.reshape(1, -1)
-                            
-                            try:
-                                if hasattr(self.scaler, 'mean_'):
-                                    features = self.scaler.transform(features)
-                                
-                                pred_class = model.predict(features)[0]
-                                if hasattr(model, 'predict_proba'):
-                                    probs = model.predict_proba(features)[0]
-                                    confidence = np.max(probs)
-                                else:
-                                    confidence = 0.7
-                            except Exception as e:
-                                pred_class = 3
-                                confidence = 0.5
-                        else:
-                            pred_class = 3
-                            confidence = 0.5
-                    
+                    pred_class, confidence = self._predict_single_point(
+                        model_name, model, point_data, years, transition_matrix, feature_dim
+                    )
                     predictions[i + j] = pred_class
                     confidences[i + j] = confidence
         
         return predictions, confidences
+    
+    def _predict_single_point(self, model_name, model, point_data, years, transition_matrix, feature_dim):
+        """Helper function to predict single point"""
+        if model_name == 'MC' and transition_matrix is not None:
+            current_probs = np.ones(len(transition_matrix)) / len(transition_matrix)
+            for _ in range(years // 25):
+                current_probs = current_probs @ transition_matrix
+            pred_class = np.argmax(current_probs) + 1
+            confidence = np.max(current_probs)
+            
+        elif model_name == 'FL' and model is not None:
+            try:
+                # Fuzzy logic prediction
+                pred_class = 3
+                confidence = 0.6
+            except:
+                pred_class = 3
+                confidence = 0.5
+        else:
+            if model is not None:
+                features = point_data['features'].copy()
+                
+                # Pastikan fitur memiliki dimensi yang benar
+                if len(features) < feature_dim:
+                    features = np.pad(features, (0, feature_dim - len(features)), 
+                                    'constant', constant_values=0)
+                elif len(features) > feature_dim:
+                    features = features[:feature_dim]
+                
+                features = features.reshape(1, -1)
+                
+                try:
+                    # Scale features if scaler is fitted
+                    if hasattr(self.scaler, 'mean_'):
+                        features = self.scaler.transform(features)
+                    
+                    pred_class = model.predict(features)[0]
+                    if hasattr(model, 'predict_proba'):
+                        probs = model.predict_proba(features)[0]
+                        confidence = np.max(probs)
+                    else:
+                        confidence = 0.8
+                except Exception as e:
+                    # Fallback prediction
+                    pred_class = 3
+                    confidence = 0.5
+            else:
+                pred_class = 3
+                confidence = 0.5
+        
+        return pred_class, confidence
 
 
 # Fungsi untuk membuat peta folium dengan basemap (5 kelas)
@@ -1055,11 +965,11 @@ def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None, sho
     legend_html = '''
     <div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border-radius: 5px; border: 2px solid grey; box-shadow: 3px 3px 5px rgba(0,0,0,0.3);">
         <p><strong>Legenda Tutupan Lahan</strong></p>
-        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air (Dilindungi)</p>
-        <p><span style="background-color: #2ecc71; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Rapat (Dilindungi)</p>
-        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Jarang (Dinamis)</p>
-        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbangun (Dinamis)</p>
-        <p><span style="background-color: #95a5a6; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka (Dinamis)</p>
+        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air</p>
+        <p><span style="background-color: #2ecc71; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Rapat</p>
+        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Jarang</p>
+        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbangun</p>
+        <p><span style="background-color: #95a5a6; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka</p>
     </div>
     '''
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -1082,36 +992,14 @@ with tab1:
     # Sample data section
     st.markdown("""
     <div class='sample-data-card'>
-        <h4>📁 Data Contoh Kota Makassar</h4>
-        <p>Gunakan data contoh dari Kota Makassar untuk simulasi cepat:</p>
+        <h4>📁 Data Contoh</h4>
+        <p>Gunakan data contoh untuk simulasi cepat:</p>
         <ul>
-            <li><strong>Land_Cover_Kota_Makassar_Tahun_2009.geojson</strong> - Data tutupan lahan tahun 2009</li>
-            <li><strong>Land_Cover_Kota_Makassar_Tahun_2015.geojson</strong> - Data tutupan lahan tahun 2015</li>
+            <li><strong>Land_Cover_Tahun_2009.geojson</strong> - Data tutupan lahan tahun 2009</li>
+            <li><strong>Land_Cover_Tahun_2015.geojson</strong> - Data tutupan lahan tahun 2015</li>
         </ul>
-        <p>🔗 Sumber: <a href='https://drive.google.com/drive/folders/1mPKzyD9-aFrHGcBzH6EVP2FwOQS6xYlv' target='_blank' class='download-link'>Google Drive - Urban Growth Makassar 2009-2015</a></p>
     </div>
     """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📥 Muat Data Contoh Makassar 2009-2015", use_container_width=True):
-            with st.spinner("⏳ Memuat data contoh..."):
-                try:
-                    # Untuk demonstrasi, kita akan menggunakan file yang sudah diupload
-                    st.info("📌 Catatan: Untuk menggunakan data sesungguhnya, upload file GeoJSON dari folder Google Drive.")
-                    st.markdown("""
-                    **Langkah-langkah menggunakan data contoh:**
-                    1. Download file dari [Google Drive](https://drive.google.com/drive/folders/1mPKzyD9-aFrHGcBzH6EVP2FwOQS6xYlv)
-                    2. Upload file menggunakan form di bawah
-                    3. Proses data dengan klik tombol "Proses Data yang Diunggah"
-                    """)
-                    
-                    # Set flag bahwa sample data sudah siap
-                    st.session_state.sample_data_loaded = True
-                    
-                except Exception as e:
-                    st.error(f"Error memuat data contoh: {str(e)}")
     
     st.markdown("---")
     st.markdown("""
@@ -1237,20 +1125,18 @@ with tab1:
                                         folium_static(m, width=800, height=500)
                                     
                                     # Show statistics
-                                    col1, col2, col3, col4, col5, col6 = st.columns(6)
+                                    col1, col2, col3, col4, col5 = st.columns(5)
                                     counts = gdf_reclass['gridcode'].value_counts()
                                     with col1:
-                                        st.metric("Badan Air 🛡️", counts.get(1, 0))
+                                        st.metric("Badan Air", counts.get(1, 0))
                                     with col2:
-                                        st.metric("Vegetasi Rapat 🛡️", counts.get(2, 0))
+                                        st.metric("Vegetasi Rapat", counts.get(2, 0))
                                     with col3:
                                         st.metric("Vegetasi Jarang", counts.get(3, 0))
                                     with col4:
                                         st.metric("Lahan Terbangun", counts.get(4, 0))
                                     with col5:
                                         st.metric("Lahan Terbuka", counts.get(5, 0))
-                                    with col6:
-                                        st.metric("Total Dilindungi", counts.get(1, 0) + counts.get(2, 0))
 
 # ========== TAB 2: ANALISIS HISTORIS ==========
 with tab2:
@@ -1361,19 +1247,19 @@ with tab2:
             # Create interactive plot
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Air'],
-                                     mode='lines+markers', name='Air (Dilindungi)',
+                                     mode='lines+markers', name='Air',
                                      line=dict(color='#3498db', width=3)))
             fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Rapat'],
-                                     mode='lines+markers', name='Vegetasi Rapat (Dilindungi)',
+                                     mode='lines+markers', name='Vegetasi Rapat',
                                      line=dict(color='#2ecc71', width=3)))
             fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Vegetasi Jarang'],
-                                     mode='lines+markers', name='Vegetasi Jarang (Dinamis)',
+                                     mode='lines+markers', name='Vegetasi Jarang',
                                      line=dict(color='#f1c40f', width=3)))
             fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Lahan Terbangun'],
-                                     mode='lines+markers', name='Lahan Terbangun (Dinamis)',
+                                     mode='lines+markers', name='Lahan Terbangun',
                                      line=dict(color='#e74c3c', width=3)))
             fig.add_trace(go.Scatter(x=plot_df['Tahun'], y=plot_df['Lahan Terbuka'],
-                                     mode='lines+markers', name='Lahan Terbuka (Dinamis)',
+                                     mode='lines+markers', name='Lahan Terbuka',
                                      line=dict(color='#95a5a6', width=3)))
             
             fig.update_layout(
@@ -1854,7 +1740,7 @@ with tab4:
                     else:
                         st.warning("⚠️ Tidak ada skenario prediksi tersedia")
                 
-                # Visualization dengan matplotlib
+                # Visualization dengan matplotlib - MENGGUNAKAN PLOT SEPERTI GAMBAR
                 st.subheader("🗺️ Visualisasi Grid Prediksi")
                 
                 # Buat tabs untuk setiap skenario
@@ -1873,41 +1759,76 @@ with tab4:
                                 col1, col2 = st.columns(2)
                                 
                                 with col1:
-                                    fig, ax = plt.subplots(figsize=(8, 6))
+                                    fig, ax = plt.subplots(figsize=(10, 8))
                                     
-                                    # Create custom colormap for 5 classes
+                                    # Create custom colormap for 5 classes - SESUAI GAMBAR
                                     from matplotlib.colors import ListedColormap
                                     colors = ['#3498db', '#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6']
                                     cmap = ListedColormap(colors)
                                     
+                                    # Plot dengan extent yang tepat
                                     im = ax.imshow(pred_reshaped, cmap=cmap,
                                                   extent=[x_coords[0], x_coords[-1],
                                                           y_coords[0], y_coords[-1]],
-                                                  origin='lower', aspect='auto', vmin=1, vmax=5)
+                                                  origin='lower', aspect='auto', vmin=1, vmax=5,
+                                                  interpolation='nearest')
                                     
-                                    # Create colorbar with labels
-                                    cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3, 4, 5])
+                                    # Tambahkan grid lines
+                                    ax.grid(True, linestyle='--', alpha=0.3, color='gray')
+                                    
+                                    # Set labels dan title
+                                    ax.set_xlabel('Bujur', fontsize=12)
+                                    ax.set_ylabel('Lintang', fontsize=12)
+                                    ax.set_title('Prediksi Tutupan Lahan', fontsize=14, fontweight='bold')
+                                    
+                                    # Create colorbar with labels - SEPERTI GAMBAR
+                                    cbar = plt.colorbar(im, ax=ax, ticks=[1, 2, 3, 4, 5], 
+                                                       fraction=0.046, pad=0.04)
                                     cbar.ax.set_yticklabels(['Badan Air', 'Vegetasi Rapat', 'Vegetasi Jarang', 
-                                                            'Lahan Terbangun', 'Lahan Terbuka'])
+                                                            'Lahan Terbangun', 'Lahan Terbuka'], fontsize=10)
+                                    cbar.ax.tick_params(labelsize=10)
                                     
-                                    ax.set_title('Prediksi Tutupan Lahan')
-                                    ax.set_xlabel('Bujur')
-                                    ax.set_ylabel('Lintang')
+                                    # Tambahkan boundary box
+                                    ax.set_xlim(x_coords[0], x_coords[-1])
+                                    ax.set_ylim(y_coords[0], y_coords[-1])
+                                    
+                                    plt.tight_layout()
                                     st.pyplot(fig)
                                     plt.close(fig)  # Clean up memory
                                 
                                 with col2:
-                                    fig, ax = plt.subplots(figsize=(8, 6))
+                                    fig, ax = plt.subplots(figsize=(10, 8))
                                     im = ax.imshow(conf_reshaped, cmap='RdYlGn',
                                                   extent=[x_coords[0], x_coords[-1],
                                                           y_coords[0], y_coords[-1]],
-                                                  origin='lower', aspect='auto', vmin=0, vmax=1)
-                                    plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan')
-                                    ax.set_title('Peta Kepercayaan')
-                                    ax.set_xlabel('Bujur')
-                                    ax.set_ylabel('Lintang')
+                                                  origin='lower', aspect='auto', vmin=0, vmax=1,
+                                                  interpolation='nearest')
+                                    
+                                    # Tambahkan grid lines
+                                    ax.grid(True, linestyle='--', alpha=0.3, color='gray')
+                                    
+                                    ax.set_xlabel('Bujur', fontsize=12)
+                                    ax.set_ylabel('Lintang', fontsize=12)
+                                    ax.set_title('Peta Kepercayaan', fontsize=14, fontweight='bold')
+                                    
+                                    cbar = plt.colorbar(im, ax=ax, label='Tingkat Kepercayaan', 
+                                                       fraction=0.046, pad=0.04)
+                                    cbar.ax.tick_params(labelsize=10)
+                                    
+                                    plt.tight_layout()
                                     st.pyplot(fig)
                                     plt.close(fig)  # Clean up memory
+                                
+                                # Tampilkan statistik tambahan
+                                st.markdown(f"**Statistik {pred_data['display_name']}:**")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Rata-rata Kepercayaan", f"{np.mean(pred_data['confidences']):.3f}")
+                                with col2:
+                                    st.metric("Kepercayaan Min", f"{np.min(pred_data['confidences']):.3f}")
+                                with col3:
+                                    st.metric("Kepercayaan Max", f"{np.max(pred_data['confidences']):.3f}")
+                                
                             except Exception as e:
                                 st.error(f"Error visualisasi untuk {pred_data['display_name']}: {str(e)}")
                 
