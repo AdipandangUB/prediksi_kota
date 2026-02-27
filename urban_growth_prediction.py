@@ -41,6 +41,7 @@ import branca.colormap as cm
 import requests
 import io
 import zipfile
+import tempfile
 
 warnings.filterwarnings('ignore')
 
@@ -127,6 +128,12 @@ st.markdown("""
         display: inline-block;
         margin: 2px;
     }
+    .file-format-selector {
+        background-color: #f0f2f6;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -153,13 +160,15 @@ if 'sample_data_loaded' not in st.session_state:
     st.session_state.sample_data_loaded = False
 if 'policy_effectiveness' not in st.session_state:
     st.session_state.policy_effectiveness = None
+if 'file_format' not in st.session_state:
+    st.session_state.file_format = "GeoJSON (.geojson)"
 
 # Title with animation - INDONESIA
 st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
 st.markdown("""
 <div style='background-color: #e6f3ff; padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #4CAF50;'>
     <h4 style='color: #2c3e50;'>📊 Analisis perubahan tutupan lahan historis dan prediksi skenario masa depan menggunakan 12 model ML canggih</h4>
-    <p style='color: #34495e;'>Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk mendeteksi pola perubahan</p>
+    <p style='color: #34495e;'>Unggah minimal 2 file GeoJSON atau Shapefile (shp) dari tahun yang berbeda untuk mendeteksi pola perubahan</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -361,6 +370,114 @@ class LandCoverAnalyzer:
         except Exception as e:
             st.error(f"Error memuat data {year}: {str(e)}")
             return None
+    
+    def load_shapefile_from_zip(self, zip_file, year):
+        """Load shapefile from uploaded zip file"""
+        try:
+            # Buat direktori temporary
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Baca zip file
+                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                    zip_ref.extractall(tmpdir)
+                
+                # Cari file .shp dalam direktori
+                shp_files = []
+                for root, dirs, files in os.walk(tmpdir):
+                    for file in files:
+                        if file.endswith('.shp'):
+                            shp_files.append(os.path.join(root, file))
+                
+                if not shp_files:
+                    st.error(f"Tidak ditemukan file .shp dalam zip untuk tahun {year}")
+                    return None
+                
+                # Ambil file shp pertama
+                shp_path = shp_files[0]
+                
+                # Load shapefile
+                gdf = gpd.read_file(shp_path)
+                
+                # Validate required columns
+                required_cols = ['gridcode', 'LandCover', 'geometry']
+                # Cek kemungkinan nama kolom yang berbeda (case insensitive)
+                gdf.columns = gdf.columns.str.lower()
+                
+                # Mapping kolom jika perlu
+                column_mapping = {}
+                for col in required_cols:
+                    if col not in gdf.columns:
+                        # Cari kolom yang mirip
+                        for gdf_col in gdf.columns:
+                            if col.lower() in gdf_col.lower():
+                                column_mapping[gdf_col] = col
+                                break
+                
+                # Rename columns jika ada mapping
+                if column_mapping:
+                    gdf = gdf.rename(columns=column_mapping)
+                
+                # Validasi ulang
+                missing = [col for col in required_cols if col not in gdf.columns]
+                if missing:
+                    st.warning(f"Kolom yang tersedia: {list(gdf.columns)}")
+                    st.error(f"Kolom yang diperlukan tidak ditemukan dalam data {year}: {missing}")
+                    return None
+                
+                # Ensure valid geometries
+                gdf = gdf[gdf.geometry.notna() & gdf.geometry.is_valid]
+                
+                # Set CRS if not present
+                if gdf.crs is None:
+                    gdf.set_crs(epsg=4326, inplace=True)
+                
+                # Create reclassified version (5 kelas)
+                gdf_reclass = gdf.copy()
+                gdf_reclass['gridcode_original'] = gdf_reclass['gridcode']
+                gdf_reclass['gridcode'] = gdf_reclass['gridcode_original'].apply(reclassify_land_cover)
+                gdf_reclass['LandCover'] = gdf_reclass['gridcode'].map({
+                    1: 'Badan Air',
+                    2: 'Vegetasi Rapat',
+                    3: 'Vegetasi Jarang',
+                    4: 'Lahan Terbangun',
+                    5: 'Lahan Terbuka'
+                })
+                
+                # Store both versions
+                self.reclassified_gdfs[year] = gdf_reclass
+                
+                # Set reference GDF untuk ekstraksi fitur (gunakan yang terbaru)
+                if self.reference_gdf is None or year > max(self.years) if self.years else True:
+                    self.reference_gdf = gdf_reclass
+                
+                return gdf
+                
+        except Exception as e:
+            st.error(f"Error memuat shapefile dari zip untuk tahun {year}: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+            return None
+
+    def load_multiple_files(self, files_dict):
+        """Load multiple files from different formats"""
+        success_count = 0
+        for year, file_data in files_dict.items():
+            file = file_data['file']
+            file_type = file_data.get('type', 'geojson')
+            
+            if file_type == 'geojson':
+                gdf = self.load_geojson(file, year)
+            elif file_type == 'shapefile':
+                gdf = self.load_shapefile_from_zip(file, year)
+            else:
+                st.warning(f"Tipe file tidak dikenal untuk tahun {year}")
+                continue
+            
+            if gdf is not None:
+                self.gdfs[year] = gdf
+                self.years.append(year)
+                success_count += 1
+        
+        return success_count
     
     def get_reclassified_gdf(self, year):
         """Get reclassified GeoDataFrame for a specific year"""
@@ -1004,24 +1121,46 @@ with tab1:
     st.markdown("---")
     st.markdown("""
     <div style='background-color: #fff8e7; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
-        <p>📌 Unggah minimal 2 file GeoJSON dari tahun yang berbeda untuk menganalisis pola perubahan</p>
-        <p>🗂️ Format file: <strong>GeoJSON</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
+        <p>📌 Unggah minimal 2 file GeoJSON atau Shapefile (shp) dari tahun yang berbeda untuk menganalisis pola perubahan</p>
+        <p>🗂️ Format file: <strong>GeoJSON</strong> atau <strong>Shapefile (shp)</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
         <p>🔄 <strong>Reklasifikasi Otomatis:</strong> Data akan direklasifikasi menjadi 5 kelas: Badan Air (1), Vegetasi Rapat (2), Vegetasi Jarang (3), Lahan Terbangun (4), Lahan Terbuka (5)</p>
         <p>🛡️ <strong>Kelas Dilindungi:</strong> Badan Air (1) dan Vegetasi Rapat (2) akan dilindungi dalam skenario kebijakan</p>
     </div>
     """, unsafe_allow_html=True)
     
+    # Pilihan format file
+    st.markdown("<div class='file-format-selector'>", unsafe_allow_html=True)
+    file_format = st.radio(
+        "Pilih format file yang akan diunggah:",
+        options=["GeoJSON (.geojson)", "Shapefile (.shp) - upload zip file"],
+        horizontal=True,
+        key="file_format_selector"
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+    
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("📁 File 1 (Tahun Terdahulu)")
-        file1 = st.file_uploader("Pilih GeoJSON pertama", type=['geojson'], key='file1')
+        
+        if file_format == "GeoJSON (.geojson)":
+            file1 = st.file_uploader("Pilih GeoJSON pertama", type=['geojson'], key='file1')
+        else:  # Shapefile
+            st.info("📦 Upload file ZIP yang berisi semua komponen shapefile (.shp, .shx, .dbf, .prj)")
+            file1 = st.file_uploader("Pilih file ZIP shapefile pertama", type=['zip'], key='file1_shp')
+            
         year1 = st.number_input("Tahun untuk File 1", min_value=1900, max_value=2100, 
                                 value=2009, step=1, key='year1')
         
     with col2:
         st.subheader("📁 File 2 (Tahun Terbaru)")
-        file2 = st.file_uploader("Pilih GeoJSON kedua", type=['geojson'], key='file2')
+        
+        if file_format == "GeoJSON (.geojson)":
+            file2 = st.file_uploader("Pilih GeoJSON kedua", type=['geojson'], key='file2')
+        else:  # Shapefile
+            st.info("📦 Upload file ZIP yang berisi semua komponen shapefile (.shp, .shx, .dbf, .prj)")
+            file2 = st.file_uploader("Pilih file ZIP shapefile kedua", type=['zip'], key='file2_shp')
+            
         year2 = st.number_input("Tahun untuk File 2", min_value=1900, max_value=2100, 
                                 value=2015, step=1, key='year2')
     
@@ -1032,8 +1171,12 @@ with tab1:
         for i in range(3):
             col1, col2 = st.columns(2)
             with col1:
-                file = st.file_uploader(f"File Tambahan {i+1}", type=['geojson'], 
-                                        key=f'file_add_{i}')
+                if file_format == "GeoJSON (.geojson)":
+                    file = st.file_uploader(f"File Tambahan {i+1}", type=['geojson'], 
+                                            key=f'file_add_{i}')
+                else:
+                    file = st.file_uploader(f"File ZIP Tambahan {i+1}", type=['zip'],
+                                            key=f'file_add_shp_{i}')
             with col2:
                 year = st.number_input(f"Tahun untuk File {i+1}", min_value=1900, max_value=2100,
                                        value=2010 + i*5, step=1, key=f'year_add_{i}')
@@ -1045,9 +1188,14 @@ with tab1:
             st.error("⚠️ Harap unggah minimal 2 file")
         else:
             with st.spinner("⏳ Memproses data..."):
-                # Load files
-                gdf1 = analyzer.load_geojson(file1, year1)
-                gdf2 = analyzer.load_geojson(file2, year2)
+                # Load files berdasarkan format yang dipilih
+                if file_format == "GeoJSON (.geojson)":
+                    gdf1 = analyzer.load_geojson(file1, year1)
+                    gdf2 = analyzer.load_geojson(file2, year2)
+                else:
+                    # Load dari shapefile (zip)
+                    gdf1 = analyzer.load_shapefile_from_zip(file1, year1)
+                    gdf2 = analyzer.load_shapefile_from_zip(file2, year2)
                 
                 if gdf1 is not None and gdf2 is not None:
                     # Store original GDFs
@@ -1057,7 +1205,11 @@ with tab1:
                     
                     # Load additional files
                     for file, year in additional_files:
-                        gdf = analyzer.load_geojson(file, year)
+                        if file_format == "GeoJSON (.geojson)":
+                            gdf = analyzer.load_geojson(file, year)
+                        else:
+                            gdf = analyzer.load_shapefile_from_zip(file, year)
+                        
                         if gdf is not None:
                             analyzer.gdfs[year] = gdf
                             analyzer.years.append(year)
@@ -1977,6 +2129,83 @@ with tab5:
                                 st.error(f"Error membuat GeoJSON: {str(e)}")
             
             with col2:
+                st.markdown("### 🗺️ Ekspor sebagai Shapefile")
+                
+                for scenario_name, pred_data in list(predictions.items())[:2]:
+                    display_name = pred_data.get('display_name', scenario_name.replace('_', ' ').title())
+                    if st.button(f"🗺️ Generate Shapefile untuk {display_name}", key=f"shp_btn_{scenario_name}"):
+                        with st.spinner("⏳ Menghasilkan Shapefile..."):
+                            try:
+                                x_coords = grid_info['x_coords']
+                                y_coords = grid_info['y_coords']
+                                
+                                # Sampling untuk Shapefile
+                                total_cells = len(y_coords) * len(x_coords)
+                                sample_step = max(1, total_cells // 1000)
+                                
+                                pred_reshaped = pred_data['predictions'].reshape(len(y_coords), len(x_coords))
+                                conf_reshaped = pred_data['confidences'].reshape(len(y_coords), len(x_coords))
+                                
+                                geometries = []
+                                properties = []
+                                point_count = 0
+                                
+                                for i, y in enumerate(y_coords):
+                                    for j, x in enumerate(x_coords):
+                                        if point_count % sample_step == 0:
+                                            cell_size_x = (x_coords[-1] - x_coords[0]) / len(x_coords)
+                                            cell_size_y = (y_coords[-1] - y_coords[0]) / len(y_coords)
+                                            
+                                            geom = box(x - cell_size_x/2, y - cell_size_y/2,
+                                                      x + cell_size_x/2, y + cell_size_y/2)
+                                            
+                                            pred_class = int(pred_reshaped[i, j])
+                                            class_name = {1: 'Badan Air', 2: 'Vegetasi Rapat', 
+                                                        3: 'Vegetasi Jarang', 4: 'Lahan Terbangun',
+                                                        5: 'Lahan Terbuka'}.get(pred_class, 'Unknown')
+                                            
+                                            geometries.append(geom)
+                                            properties.append({
+                                                'gridcode': pred_class,
+                                                'land_cover': class_name,
+                                                'status': 'Dilindungi' if pred_class in [1, 2] else 'Dinamis',
+                                                'confidence': float(conf_reshaped[i, j])
+                                            })
+                                        point_count += 1
+                                
+                                if geometries:
+                                    pred_gdf = gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
+                                    
+                                    # Buat temporary directory untuk shapefile
+                                    with tempfile.TemporaryDirectory() as tmpdir:
+                                        # Simpan shapefile
+                                        shp_base = os.path.join(tmpdir, f"prediksi_{scenario_name[:30]}")
+                                        pred_gdf.to_file(shp_base, driver='ESRI Shapefile')
+                                        
+                                        # Buat zip file
+                                        zip_buffer = io.BytesIO()
+                                        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                                            # Tambahkan semua file shapefile ke zip
+                                            for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
+                                                file_path = shp_base + ext
+                                                if os.path.exists(file_path):
+                                                    zip_file.write(file_path, arcname=f"prediksi_{scenario_name[:30]}{ext}")
+                                        
+                                        zip_buffer.seek(0)
+                                        
+                                        st.download_button(
+                                            label=f"📥 Unduh {display_name} (Shapefile ZIP)",
+                                            data=zip_buffer,
+                                            file_name=f"{scenario_name}_5kelas_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                            mime="application/zip",
+                                            key=f"shp_{scenario_name}",
+                                            use_container_width=True
+                                        )
+                                        
+                                        st.info(f"📊 Mengekspor {len(pred_gdf)} dari {total_cells} sel (sampling 1:{sample_step})")
+                            except Exception as e:
+                                st.error(f"Error membuat Shapefile: {str(e)}")
+                
                 st.markdown("### 📊 Galeri Visualisasi")
                 
                 # Simplified comparison plots
