@@ -134,6 +134,30 @@ st.markdown("""
         border-radius: 5px;
         margin-bottom: 15px;
     }
+    .success-box {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 15px;
+        border-radius: 5px;
+        border-left: 5px solid #28a745;
+        margin: 10px 0;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 15px;
+        border-radius: 5px;
+        border-left: 5px solid #ffc107;
+        margin: 10px 0;
+    }
+    .error-box {
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 15px;
+        border-radius: 5px;
+        border-left: 5px solid #dc3545;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -162,6 +186,8 @@ if 'policy_effectiveness' not in st.session_state:
     st.session_state.policy_effectiveness = None
 if 'file_format' not in st.session_state:
     st.session_state.file_format = "GeoJSON (.geojson)"
+if 'upload_warnings' not in st.session_state:
+    st.session_state.upload_warnings = []
 
 # Title with animation - INDONESIA
 st.title("🌍 Sistem Analisis & Prediksi Perubahan Tutupan Lahan")
@@ -294,16 +320,20 @@ def reclassify_land_cover(gridcode):
     - gridcode 4 (Bangunan) -> kelas 4 (Lahan Terbangun)
     - Lainnya (jika ada) -> kelas 5 (Lahan Terbuka)
     """
-    if gridcode == 1:
-        return 1  # Badan Air
-    elif gridcode == 2:
-        return 2  # Vegetasi Rapat
-    elif gridcode == 3:
-        return 3  # Vegetasi Jarang
-    elif gridcode == 4:
-        return 4  # Lahan Terbangun
-    else:
-        return 5  # Lahan Terbuka (default untuk kode lain)
+    try:
+        gridcode = int(gridcode)
+        if gridcode == 1:
+            return 1  # Badan Air
+        elif gridcode == 2:
+            return 2  # Vegetasi Rapat
+        elif gridcode == 3:
+            return 3  # Vegetasi Jarang
+        elif gridcode == 4:
+            return 4  # Lahan Terbangun
+        else:
+            return 5  # Lahan Terbuka (default untuk kode lain)
+    except:
+        return 5  # Default jika error
 
 class LandCoverAnalyzer:
     """Main class for land cover analysis and prediction"""
@@ -323,6 +353,7 @@ class LandCoverAnalyzer:
         self.feature_dim = N_TEMPORAL_FEATURES  # Default feature dimension
         self.reclassified_gdfs = {}  # Untuk menyimpan GDF yang sudah direklasifikasi
         self.reference_gdf = None  # Untuk menyimpan GDF referensi untuk ekstraksi fitur
+        self.upload_warnings = []
         
     def load_geojson(self, file, year):
         """Load and validate GeoJSON file"""
@@ -333,12 +364,35 @@ class LandCoverAnalyzer:
             else:
                 gdf = gpd.read_file(file)
             
-            # Validate required columns
-            required_cols = ['gridcode', 'LandCover', 'geometry']
+            # Validate required columns (case insensitive)
+            gdf.columns = [col.lower() for col in gdf.columns]
+            
+            # Cek kolom yang diperlukan
+            required_cols = ['gridcode', 'landcover', 'geometry']
             missing = [col for col in required_cols if col not in gdf.columns]
+            
             if missing:
-                st.error(f"Kolom yang hilang dalam data {year}: {missing}")
+                # Coba mapping kolom
+                column_mapping = {}
+                for col in required_cols:
+                    if col not in gdf.columns:
+                        for gdf_col in gdf.columns:
+                            if col in gdf_col or gdf_col in col:
+                                column_mapping[gdf_col] = col
+                                break
+                
+                if column_mapping:
+                    gdf = gdf.rename(columns=column_mapping)
+                    missing = [col for col in required_cols if col not in gdf.columns]
+            
+            if missing:
+                st.error(f"Kolom yang diperlukan tidak ditemukan dalam data {year}: {missing}")
+                st.info(f"Kolom yang tersedia: {list(gdf.columns)}")
                 return None
+            
+            # Pastikan kolom LandCover ada
+            if 'landcover' in gdf.columns and 'LandCover' not in gdf.columns:
+                gdf['LandCover'] = gdf['landcover']
             
             # Ensure valid geometries
             gdf = gdf[gdf.geometry.notna() & gdf.geometry.is_valid]
@@ -346,6 +400,9 @@ class LandCoverAnalyzer:
             # Set CRS if not present
             if gdf.crs is None:
                 gdf.set_crs(epsg=4326, inplace=True)
+            
+            # Convert gridcode to int
+            gdf['gridcode'] = pd.to_numeric(gdf['gridcode'], errors='coerce').fillna(5).astype(int)
             
             # Create reclassified version (5 kelas)
             gdf_reclass = gdf.copy()
@@ -368,11 +425,13 @@ class LandCoverAnalyzer:
             
             return gdf
         except Exception as e:
-            st.error(f"Error memuat data {year}: {str(e)}")
+            st.error(f"Error memuat data GeoJSON untuk tahun {year}: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
             return None
     
     def load_shapefile_from_zip(self, zip_file, year):
-        """Load shapefile from uploaded zip file"""
+        """Load shapefile from uploaded zip file dengan menangani file macOS"""
         try:
             # Buat direktori temporary
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -380,44 +439,130 @@ class LandCoverAnalyzer:
                 with zipfile.ZipFile(zip_file, 'r') as zip_ref:
                     zip_ref.extractall(tmpdir)
                 
-                # Cari file .shp dalam direktori
+                # Cari file .shp dalam direktori, skip folder __MACOSX dan file hidden
                 shp_files = []
                 for root, dirs, files in os.walk(tmpdir):
+                    # Skip __MACOSX folder
+                    if '__MACOSX' in root:
+                        continue
+                    
+                    # Skip hidden folders
+                    if any(part.startswith('.') for part in root.split(os.sep)):
+                        continue
+                        
                     for file in files:
-                        if file.endswith('.shp'):
-                            shp_files.append(os.path.join(root, file))
+                        # Skip hidden files dan file macOS
+                        if file.startswith('._') or file.startswith('.'):
+                            continue
+                        if file.lower().endswith('.shp'):
+                            full_path = os.path.join(root, file)
+                            shp_files.append(full_path)
+                            st.info(f"Found shapefile: {os.path.basename(full_path)}")
                 
                 if not shp_files:
-                    st.error(f"Tidak ditemukan file .shp dalam zip untuk tahun {year}")
+                    # Coba cari dengan pattern yang lebih fleksibel
+                    for root, dirs, files in os.walk(tmpdir):
+                        if '__MACOSX' in root:
+                            continue
+                        for file in files:
+                            if not file.startswith('._') and not file.startswith('.'):
+                                if file.lower().endswith('.shp'):
+                                    shp_files.append(os.path.join(root, file))
+                
+                if not shp_files:
+                    st.error(f"Tidak ditemukan file .shp yang valid dalam zip untuk tahun {year}")
+                    # Tampilkan struktur direktori untuk debugging
+                    st.info("Struktur file dalam ZIP:")
+                    for root, dirs, files in os.walk(tmpdir):
+                        level = root.replace(tmpdir, '').count(os.sep)
+                        indent = ' ' * 2 * level
+                        st.info(f"{indent}{os.path.basename(root)}/")
+                        subindent = ' ' * 2 * (level + 1)
+                        for file in files[:10]:  # Tampilkan maksimal 10 file
+                            st.info(f"{subindent}{file}")
                     return None
                 
-                # Ambil file shp pertama
+                # Ambil file shp pertama yang valid
                 shp_path = shp_files[0]
+                st.info(f"Memuat shapefile: {os.path.basename(shp_path)}")
                 
-                # Load shapefile
-                gdf = gpd.read_file(shp_path)
+                # Load shapefile dengan menangani encoding
+                try:
+                    gdf = gpd.read_file(shp_path)
+                except UnicodeDecodeError:
+                    # Coba dengan encoding berbeda
+                    try:
+                        gdf = gpd.read_file(shp_path, encoding='utf-8')
+                    except:
+                        gdf = gpd.read_file(shp_path, encoding='latin1')
+                except Exception as e:
+                    st.warning(f"Error membaca shapefile, mencoba dengan driver spesifik: {str(e)}")
+                    # Coba dengan driver shapefile eksplisit
+                    gdf = gpd.read_file(shp_path, driver='ESRI Shapefile')
                 
-                # Validate required columns
-                required_cols = ['gridcode', 'LandCover', 'geometry']
-                # Cek kemungkinan nama kolom yang berbeda (case insensitive)
-                gdf.columns = gdf.columns.str.lower()
+                # Validate required columns (case insensitive)
+                gdf.columns = [col.lower() for col in gdf.columns]
+                
+                # Cek kolom yang diperlukan
+                required_cols = ['gridcode', 'landcover', 'geometry']
+                available_cols = list(gdf.columns)
                 
                 # Mapping kolom jika perlu
                 column_mapping = {}
-                for col in required_cols:
-                    if col not in gdf.columns:
-                        # Cari kolom yang mirip
-                        for gdf_col in gdf.columns:
-                            if col.lower() in gdf_col.lower():
-                                column_mapping[gdf_col] = col
+                
+                for req_col in required_cols:
+                    found = False
+                    for avail_col in available_cols:
+                        # Cek berbagai kemungkinan nama kolom
+                        if req_col == 'gridcode':
+                            if any(key in avail_col for key in ['gridcode', 'grid_code', 'grid', 'kode', 'code']):
+                                column_mapping[avail_col] = 'gridcode'
+                                found = True
                                 break
+                        elif req_col == 'landcover':
+                            if any(key in avail_col for key in ['landcover', 'land_cover', 'cover', 'tutupan', 'class', 'kelas']):
+                                column_mapping[avail_col] = 'landcover'
+                                found = True
+                                break
+                    
+                    if not found and req_col != 'geometry':
+                        st.warning(f"Kolom {req_col} tidak ditemukan dalam data untuk tahun {year}")
                 
                 # Rename columns jika ada mapping
                 if column_mapping:
                     gdf = gdf.rename(columns=column_mapping)
                 
-                # Validasi ulang
-                missing = [col for col in required_cols if col not in gdf.columns]
+                # Pastikan kolom gridcode ada
+                if 'gridcode' not in gdf.columns:
+                    # Coba cari kolom dengan nilai numerik yang mungkin jadi gridcode
+                    for col in gdf.columns:
+                        if col != 'geometry' and gdf[col].dtype in ['int64', 'float64']:
+                            gdf['gridcode'] = gdf[col]
+                            st.warning(f"Menggunakan kolom {col} sebagai gridcode")
+                            break
+                    else:
+                        # Buat gridcode default
+                        gdf['gridcode'] = 5
+                        st.warning("Membuat gridcode default (5)")
+                
+                # Pastikan kolom LandCover ada
+                if 'landcover' not in gdf.columns:
+                    # Buat LandCover dari gridcode
+                    gdf['landcover'] = gdf['gridcode'].map({
+                        1: 'Badan Air',
+                        2: 'Vegetasi Rapat',
+                        3: 'Vegetasi Jarang',
+                        4: 'Lahan Terbangun',
+                        5: 'Lahan Terbuka'
+                    }).fillna('Unknown')
+                
+                # Convert gridcode to int
+                gdf['gridcode'] = pd.to_numeric(gdf['gridcode'], errors='coerce').fillna(5).astype(int)
+                
+                # Validasi final
+                missing = [col for col in ['gridcode', 'landcover', 'geometry'] 
+                          if col not in gdf.columns]
+                
                 if missing:
                     st.warning(f"Kolom yang tersedia: {list(gdf.columns)}")
                     st.error(f"Kolom yang diperlukan tidak ditemukan dalam data {year}: {missing}")
@@ -449,6 +594,7 @@ class LandCoverAnalyzer:
                 if self.reference_gdf is None or year > max(self.years) if self.years else True:
                     self.reference_gdf = gdf_reclass
                 
+                st.success(f"✅ Berhasil memuat shapefile untuk tahun {year}")
                 return gdf
                 
         except Exception as e:
@@ -1082,11 +1228,11 @@ def create_folium_map(gdf, title, basemap_type="OpenStreetMap", center=None, sho
     legend_html = '''
     <div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border-radius: 5px; border: 2px solid grey; box-shadow: 3px 3px 5px rgba(0,0,0,0.3);">
         <p><strong>Legenda Tutupan Lahan</strong></p>
-        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air</p>
-        <p><span style="background-color: #2ecc71; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Rapat</p>
-        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Jarang</p>
-        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbangun</p>
-        <p><span style="background-color: #95a5a6; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka</p>
+        <p><span style="background-color: #3498db; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Badan Air (Dilindungi)</p>
+        <p><span style="background-color: #2ecc71; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Rapat (Dilindungi)</p>
+        <p><span style="background-color: #f1c40f; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Vegetasi Jarang (Dinamis)</p>
+        <p><span style="background-color: #e74c3c; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbangun (Dinamis)</p>
+        <p><span style="background-color: #95a5a6; width: 20px; height: 20px; display: inline-block; margin-right: 5px;"></span> Lahan Terbuka (Dinamis)</p>
     </div>
     '''
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -1115,6 +1261,7 @@ with tab1:
             <li><strong>Land_Cover_Tahun_2009.geojson</strong> - Data tutupan lahan tahun 2009</li>
             <li><strong>Land_Cover_Tahun_2015.geojson</strong> - Data tutupan lahan tahun 2015</li>
         </ul>
+        <p>Untuk shapefile, compress semua file (.shp, .shx, .dbf, .prj) ke dalam file ZIP</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -1122,7 +1269,7 @@ with tab1:
     st.markdown("""
     <div style='background-color: #fff8e7; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
         <p>📌 Unggah minimal 2 file GeoJSON atau Shapefile (shp) dari tahun yang berbeda untuk menganalisis pola perubahan</p>
-        <p>🗂️ Format file: <strong>GeoJSON</strong> atau <strong>Shapefile (shp)</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
+        <p>🗂️ Format file: <strong>GeoJSON</strong> atau <strong>Shapefile (shp) dalam ZIP</strong> dengan kolom yang diperlukan: <code>gridcode</code>, <code>LandCover</code>, <code>geometry</code></p>
         <p>🔄 <strong>Reklasifikasi Otomatis:</strong> Data akan direklasifikasi menjadi 5 kelas: Badan Air (1), Vegetasi Rapat (2), Vegetasi Jarang (3), Lahan Terbangun (4), Lahan Terbuka (5)</p>
         <p>🛡️ <strong>Kelas Dilindungi:</strong> Badan Air (1) dan Vegetasi Rapat (2) akan dilindungi dalam skenario kebijakan</p>
     </div>
@@ -2164,11 +2311,14 @@ with tab5:
                                                         3: 'Vegetasi Jarang', 4: 'Lahan Terbangun',
                                                         5: 'Lahan Terbuka'}.get(pred_class, 'Unknown')
                                             
+                                            # Validasi class_name untuk shapefile (max 10 karakter untuk field)
+                                            status = 'Lindung' if pred_class in [1, 2] else 'Dinamis'
+                                            
                                             geometries.append(geom)
                                             properties.append({
                                                 'gridcode': pred_class,
-                                                'land_cover': class_name,
-                                                'status': 'Dilindungi' if pred_class in [1, 2] else 'Dinamis',
+                                                'class': class_name[:10],  # Batasi panjang untuk shapefile
+                                                'status': status,
                                                 'confidence': float(conf_reshaped[i, j])
                                             })
                                         point_count += 1
@@ -2176,11 +2326,16 @@ with tab5:
                                 if geometries:
                                     pred_gdf = gpd.GeoDataFrame(properties, geometry=geometries, crs='EPSG:4326')
                                     
+                                    # Buat nama file yang aman
+                                    safe_name = "".join(c for c in scenario_name if c.isalnum() or c in ['_', '-'])[:30]
+                                    
                                     # Buat temporary directory untuk shapefile
                                     with tempfile.TemporaryDirectory() as tmpdir:
-                                        # Simpan shapefile
-                                        shp_base = os.path.join(tmpdir, f"prediksi_{scenario_name[:30]}")
-                                        pred_gdf.to_file(shp_base, driver='ESRI Shapefile')
+                                        # Simpan shapefile dengan encoding yang tepat
+                                        shp_base = os.path.join(tmpdir, f"prediksi_{safe_name}")
+                                        
+                                        # Ekspor ke shapefile dengan encoding
+                                        pred_gdf.to_file(shp_base, driver='ESRI Shapefile', encoding='utf-8')
                                         
                                         # Buat zip file
                                         zip_buffer = io.BytesIO()
@@ -2189,14 +2344,16 @@ with tab5:
                                             for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
                                                 file_path = shp_base + ext
                                                 if os.path.exists(file_path):
-                                                    zip_file.write(file_path, arcname=f"prediksi_{scenario_name[:30]}{ext}")
+                                                    # Gunakan arcname yang bersih
+                                                    arcname = f"prediksi_{safe_name}{ext}"
+                                                    zip_file.write(file_path, arcname=arcname)
                                         
                                         zip_buffer.seek(0)
                                         
                                         st.download_button(
                                             label=f"📥 Unduh {display_name} (Shapefile ZIP)",
                                             data=zip_buffer,
-                                            file_name=f"{scenario_name}_5kelas_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                            file_name=f"{safe_name}_5kelas_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                                             mime="application/zip",
                                             key=f"shp_{scenario_name}",
                                             use_container_width=True
@@ -2205,6 +2362,8 @@ with tab5:
                                         st.info(f"📊 Mengekspor {len(pred_gdf)} dari {total_cells} sel (sampling 1:{sample_step})")
                             except Exception as e:
                                 st.error(f"Error membuat Shapefile: {str(e)}")
+                                import traceback
+                                st.error(traceback.format_exc())
                 
                 st.markdown("### 📊 Galeri Visualisasi")
                 
